@@ -241,7 +241,7 @@ async def toliba_top(ism: str, guruh_id: str = None, n=5):
 
 
 async def karta_top(l4: str):
-    """Oxirgi 4 raqam bo'yicha kartani topadi."""
+    """Oxirgi 4 raqam bo'yicha kartani topadi (aniq usul)."""
     if not l4:
         return None
     l4 = "".join(ch for ch in str(l4) if ch.isdigit()).zfill(4)
@@ -249,6 +249,86 @@ async def karta_top(l4: str):
         if k["l4"] and k["l4"] == l4:
             return k
     return None
+
+
+def _karta_ism_balli(qidiruv: str, karta_nomi: str) -> float:
+    """
+    Kartani ism bo'yicha solishtirish.
+    Chekda ism turli shaklda bo'ladi:
+      'Gulzoda X'      → 'Gulzoda Xursandova'
+      'Xursandova G'   → 'Gulzoda Xursandova'
+      'XURSANDOVA'     → 'Gulzoda Xursandova'
+    Bosh harf (masalan 'X') prefiks sifatida tekshiriladi.
+    """
+    from eslatma_parser import _normalize
+    q = _normalize(qidiruv)
+    n = _normalize(karta_nomi)
+    if not q or not n:
+        return 0.0
+
+    q_soz = q.split()
+    n_soz = n.split()
+    if not q_soz or not n_soz:
+        return 0.0
+
+    # Har bir qidiruv so'zini karta so'zlariga moslashtiramiz
+    mos = 0
+    ishlatilgan = set()
+    for qs in q_soz:
+        eng = 0.0
+        eng_idx = -1
+        for i, ns in enumerate(n_soz):
+            if i in ishlatilgan:
+                continue
+            if qs == ns:
+                ball = 1.0
+            elif len(qs) == 1 and ns.startswith(qs):
+                ball = 0.9              # 'x' → 'xursandova'
+            elif len(ns) == 1 and qs.startswith(ns):
+                ball = 0.9
+            elif ns.startswith(qs) or qs.startswith(ns):
+                ball = 0.85
+            else:
+                ball = oxshashlik(qs, ns)
+            if ball > eng:
+                eng, eng_idx = ball, i
+        if eng >= 0.8:
+            mos += 1
+            ishlatilgan.add(eng_idx)
+
+    # Qancha qidiruv so'zi mos keldi (0..1)
+    return mos / len(q_soz)
+
+
+async def karta_top_ism(qabul_fio: str):
+    """
+    Kartani qabul qiluvchi ismi bo'yicha topadi.
+    Qaytadi: (karta | None, koplik_bormi)
+      koplik_bormi=True → bir nechta karta mos keldi, tanlash kerak
+    """
+    if not qabul_fio or len(qabul_fio.strip()) < 2:
+        return None, False
+
+    ballar = []
+    for k in await kartalar():
+        if not k["nomi"]:
+            continue
+        b = _karta_ism_balli(qabul_fio, k["nomi"])
+        if b >= 0.75:
+            ballar.append((b, k))
+
+    if not ballar:
+        return None, False
+    ballar.sort(key=lambda x: -x[0])
+
+    # Faqat bittasi yuqori ball olsa — aniq
+    yuqori = [k for b, k in ballar if b >= 0.75]
+    if len(yuqori) == 1:
+        return yuqori[0], False
+    # Bir nechta mos keldi, lekin bittasi aniq ustun bo'lsa
+    if len(ballar) >= 2 and ballar[0][0] - ballar[1][0] >= 0.25:
+        return ballar[0][1], False
+    return None, True      # bir nechta — tanlash kerak
 
 
 # ---------------------------------------------------------------- dublikat
