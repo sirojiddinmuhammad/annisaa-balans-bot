@@ -205,11 +205,17 @@ async def _guruh_tanlandi(update: Update, uid: int, guruh: dict):
 
 
 async def _toliba_tanlandi(update: Update, uid: int, toliba: dict):
-    p = holat_saqla(uid, stage="chek_kutish",
-                    toliba_id=toliba["id"], toliba_nomi=toliba["nomi"])
+    p = holat_saqla(uid, toliba_id=toliba["id"], toliba_nomi=toliba["nomi"])
     g = p.get("guruh") or {}
     ustoza = ustoza_toza(g.get("ustoza_nomi") or "") or "—"
 
+    # Chek allaqachon o'qilgan bo'lsa (eslatmasiz oqim) → to'g'ridan tasdiqqa
+    if p.get("chek"):
+        holat_saqla(uid, stage="tasdiq")
+        await _tasdiq_korsat(update, uid)
+        return
+
+    holat_saqla(uid, stage="chek_kutish")
     await javob(update,
                 f"✅ <b>{e(toliba['nomi'])}</b>\n"
                 f"📚 {e(g.get('nomi'))}\n"
@@ -236,16 +242,28 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not admin_mi(update):
         return
     uid = update.effective_user.id
-    p = holat_p(uid)
 
     fayl, mime, nomi = _mime_aniqla(update)
     if not fayl:
         await javob(update, "❌ Faqat rasm yoki PDF qabul qilinadi.")
         return
 
-    if not p or not p.get("toliba_id"):
-        await javob(update, "❗️ Avval to'lov eslatmasini yuboring, keyin chekni.")
-        return
+    # --- Agar chek bilan birga caption'da eslatma kelgan bo'lsa ---
+    caption = (update.effective_message.caption or "").strip()
+    if caption and eslatmami(caption):
+        await eslatma_qabul(update, ctx, caption)
+
+    # --- Eslatma hali izlanayotgan bo'lsa — chek biroz kutadi ---
+    # (eslatma + chek birdaniga, 2 alohida xabar kelganda)
+    for _ in range(12):                       # ~6 soniya
+        p = holat_p(uid)
+        stage = (p or {}).get("stage")
+        if stage == "izlash":                 # eslatma hali qidirilmoqda
+            await asyncio.sleep(0.5)
+            continue
+        break
+
+    p = holat_p(uid)
 
     kutish = await update.effective_message.reply_text("🧾 Chek o'qilmoqda…")
 
@@ -292,11 +310,40 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML)
         return
 
-    holat_saqla(uid, stage="tasdiq", chek=d, chek_url=chek_url, hash=hash_,
+    holat_saqla(uid, chek=d, chek_url=chek_url, hash=hash_,
                 fayl_unique=fayl_unique, fayl_nomi=nomi, mime=mime, baytlar=baytlar)
 
     await kutish.delete()
-    await _tasdiq_korsat(update, uid)
+
+    # Eslatma bo'lgan (toliba aniqlangan) → to'g'ridan tasdiqqa
+    if p and p.get("toliba_id"):
+        holat_saqla(uid, stage="tasdiq")
+        await _tasdiq_korsat(update, uid)
+    else:
+        # Eslatmasiz chek → qo'lda guruh/toliba tanlash
+        await _eslatmasiz_boshla(update, uid, d)
+
+
+async def _eslatmasiz_boshla(update: Update, uid: int, d: dict):
+    """Eslatmasiz kelgan chek: avval qisqa xulosa, keyin guruh so'raladi."""
+    karta = None
+    if d.get("qabul_karta"):
+        karta = await N.karta_top(d["qabul_karta"])
+    if not karta and d.get("qabul_fio"):
+        karta, _ = await N.karta_top_ism(d["qabul_fio"])
+
+    karta_matn = (f"→ <b>{e(karta['nomi'])}</b> ✅" if karta
+                  else "❌ (topilmadi)")
+    qatorlar = [
+        [InlineKeyboardButton("🔍 Guruhni tanlash", callback_data="gm")],
+        [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
+    ]
+    await javob(update,
+                f"🧾 <b>Chek o'qildi</b> (eslatmasiz)\n"
+                f"💰 {pul(d.get('summa'))} so'm · {e(d.get('tolov_tizimi'))}\n"
+                f"🏦 •••• {e(d.get('qabul_karta') or '?')} {karta_matn}\n\n"
+                f"❓ Bu qaysi toliba? Avval guruhni tanlang:",
+                kb(qatorlar))
 
 
 # ============================================================ tasdiq ekrani
@@ -331,15 +378,38 @@ async def _tasdiq_korsat(update: Update, uid: int):
     ogohlar = []
     shubhali = False
 
-    # --- karta tekshiruvi ---
-    karta = await N.karta_top(d.get("qabul_karta"))
+    # --- karta tekshiruvi: avval raqam, keyin ism ---
+    karta = p.get("karta")                       # qo'lda tanlangan bo'lishi mumkin
+    karta_ism_bilan = p.get("karta_ism_bilan", False)
+    karta_hal = p.get("karta_hal", False)        # qo'lda hal qilinganmi
+    if karta is None and not karta_hal:
+        karta = await N.karta_top(d.get("qabul_karta"))
+        if karta is None and d.get("qabul_fio"):
+            # Raqam topilmadi — ism bo'yicha qidiramiz
+            karta, koplik = await N.karta_top_ism(d["qabul_fio"])
+            if karta:
+                karta_ism_bilan = True
+            elif koplik:
+                # Bir nechta karta mos keldi — tanlashni so'raymiz
+                await _karta_sorash(update, uid, d)
+                return
+        if karta is None:
+            # Karta umuman topilmadi → so'raymiz
+            await _karta_sorash(update, uid, d)
+            return
+
     karta_mos = bool(karta)
     if not karta_mos:
+        # Qo'lda "karta yo'q" tanlandi → shubhali, davom etadi
         shubhali = True
         ogohlar.append(
-            f"🚫 <b>Karta ro'yxatda yo'q:</b> •••• {e(d.get('qabul_karta') or '?')}\n"
-            f"     Chek boshqa odamniki yoki eski kartaga to'langan bo'lishi mumkin!")
-    elif "biriktirilmagan" in (karta.get("status") or "").lower():
+            f"🚫 <b>Karta ro'yxatda yo'q</b> — noma'lum deb belgilandi.")
+
+    if karta_ism_bilan:
+        shubhali = True
+        ogohlar.append(f"ℹ️ Karta ism bo'yicha topildi: <b>{e(karta['nomi'])}</b> "
+                       f"(raqam chekda yo'q edi).")
+    if "biriktirilmagan" in (karta.get("status") or "").lower():
         shubhali = True
         ogohlar.append(f"⚠️ Karta <b>{e(karta['nomi'])}</b> hozir biriktirilmagan.")
 
@@ -348,28 +418,28 @@ async def _tasdiq_korsat(update: Update, uid: int):
         ogohlar.append("🚫 <b>Chekda tasdiq yo'q</b> — to'lov o'tmagan bo'lishi mumkin!")
         shubhali = True
 
-    # --- tranzaksiya ID ---
+    # --- tranzaksiya ID (yo'q bo'lsa — to'xtatmaydi, faqat shubhali) ---
     if not d.get("tranzaksiya_id"):
         shubhali = True
-        ogohlar.append("⚠️ Tranzaksiya raqami yo'q — dublikat nazorati kuchsiz.")
 
     # --- sana ---
     yosh = _yosh(d.get("sana"))
     if not d.get("sana"):
-        shubhali = True
-        ogohlar.append("⚠️ Chekda sana yo'q.")
+        # Sana yo'q → so'raymiz (avval kartani hal qildik)
+        await _sana_sorash(update, uid, d, karta, karta_ism_bilan)
+        return
     elif yosh is not None and yosh > C.ESKI_CHEK_KUN:
         shubhali = True
         ogohlar.append(f"🚨 <b>Chek {yosh} kunlik!</b> Eski oyning to'lovi bo'lishi mumkin.")
-        oxirgi = await N.oxirgi_tolov(p["toliba_id"])
-        if oxirgi and oxirgi.get("sana"):
-            ogohlar.append(f"     Oxirgi to'lovi: {e(oxirgi['sana'][:10])} — "
-                           f"{pul(oxirgi.get('summa'))}")
+        if p.get("toliba_id"):
+            oxirgi = await N.oxirgi_tolov(p["toliba_id"])
+            if oxirgi and oxirgi.get("sana"):
+                ogohlar.append(f"     Oxirgi to'lovi: {e(oxirgi['sana'][:10])} — "
+                               f"{pul(oxirgi.get('summa'))}")
 
     # --- ishonch ---
     if d.get("ishonch") == "past":
         shubhali = True
-        ogohlar.append("⚠️ Rasm noaniq — ma'lumot xato bo'lishi mumkin.")
 
     # --- dublikat ---
     sabab, eski = await N.dublikat_izla(
@@ -383,8 +453,15 @@ async def _tasdiq_korsat(update: Update, uid: int):
 
     # --- holat ---
     holat, farq = _holat_hisobla(d.get("summa"), p.get("kutilgan"))
-    holat_saqla(uid, karta=karta, karta_mos=karta_mos, shubhali=shubhali,
+    holat_saqla(uid, karta=karta, karta_mos=karta_mos,
+                karta_ism_bilan=karta_ism_bilan, shubhali=shubhali,
                 holat=holat, yosh=yosh, dublikat=dublikat, ogohlar=ogohlar)
+
+    # === Hamma narsa aniq → AVTOMAT SAQLASH ===
+    # Faqat dublikat bo'lsa to'xtaymiz (jiddiy).
+    if not dublikat:
+        await _saqla(update, uid, avtomatik=True)
+        return
 
     # --- matn ---
     sana_matn = "—"
@@ -417,42 +494,61 @@ async def _tasdiq_korsat(update: Update, uid: int):
         matn += f" ({'+' if farq > 0 else ''}{pul(farq)})"
     matn += "\n"
 
-    if dublikat:
-        matn += (f"\n🚫 <b>TAKRORIY CHEK!</b>\n"
-                 f"Sabab: {e(dublikat['sabab'])}\n"
-                 f"<a href='{dublikat['url']}'>Eski yozuvni ochish</a>\n")
+    # Bu yerga faqat DUBLIKAT holatida yetib kelinadi
+    matn += (f"\n🚫 <b>TAKRORIY CHEK!</b>\n"
+             f"Sabab: {e(dublikat['sabab'])}\n"
+             f"<a href='{dublikat['url']}'>Eski yozuvni ochish</a>\n")
 
     if ogohlar:
         matn += "\n" + "\n".join(ogohlar) + "\n"
 
-    if shubhali:
-        matn += "\n🏷 Yozuv <b>Shubhali</b> deb belgilanadi."
-
-    # --- tugmalar ---
-    if not d.get("sana"):
-        qatorlar = [
-            [InlineKeyboardButton("📅 Bugun", callback_data="d:t"),
-             InlineKeyboardButton("📅 Kecha", callback_data="d:y")],
-            [InlineKeyboardButton("✏️ Sanani yozish", callback_data="d:m")],
-            [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
-        ]
-        matn += "\n\n<b>To'lov qachon bo'lgan?</b>"
-    elif dublikat:
-        qatorlar = [
-            [InlineKeyboardButton("⚠️ Baribir saqlash", callback_data="fsave")],
-            [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
-        ]
-    else:
-        qatorlar = [
-            [InlineKeyboardButton("💾 Saqlash", callback_data="save")],
-            [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
-        ]
-
+    qatorlar = [
+        [InlineKeyboardButton("⚠️ Baribir saqlash", callback_data="fsave")],
+        [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
+    ]
     await javob(update, matn, kb(qatorlar))
 
 
+# ============================================================ so'rov ekranlari
+async def _karta_sorash(update: Update, uid: int, d: dict):
+    """Karta topilmadi yoki bir nechta mos keldi → tugma bilan tanlash."""
+    holat_saqla(uid, stage="karta_tanlash")
+    kartalar = await N.kartalar()
+    qatorlar = [[InlineKeyboardButton(
+        f"{k['nomi']} · {k['l4'] or '—'}", callback_data=f"k:{i}")]
+        for i, k in enumerate(kartalar)]
+    qatorlar.append([InlineKeyboardButton("➖ Karta yo'q / noma'lum",
+                                          callback_data="k:none")])
+    qatorlar.append([InlineKeyboardButton("❌ Bekor", callback_data="cancel")])
+    holat_saqla(uid, karta_royxat=kartalar)
+
+    fio = d.get("qabul_fio") or "—"
+    raqam = d.get("qabul_karta") or "—"
+    await javob(update,
+                f"❓ <b>Qabul qiluvchi karta topilmadi</b>\n"
+                f"Chekda: <b>{e(fio)}</b> · •••• {e(raqam)}\n\n"
+                f"Qaysi karta?", kb(qatorlar))
+
+
+async def _sana_sorash(update: Update, uid: int, d: dict, karta, karta_ism_bilan):
+    """Chekda sana yo'q → so'raymiz."""
+    holat_saqla(uid, stage="sana_kutish", karta=karta,
+                karta_ism_bilan=karta_ism_bilan)
+    qatorlar = [
+        [InlineKeyboardButton("📅 Bugun", callback_data="d:t"),
+         InlineKeyboardButton("📅 Kecha", callback_data="d:y")],
+        [InlineKeyboardButton("✏️ Sanani yozish", callback_data="d:m")],
+        [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
+    ]
+    karta_matn = f"→ {e(karta['nomi'])}" if karta else ""
+    await javob(update,
+                f"🧾 {pul(d.get('summa'))} so'm · {e(d.get('tolov_tizimi'))} {karta_matn}\n\n"
+                f"⚠️ Chekda sana yo'q.\n<b>To'lov qachon bo'lgan?</b>",
+                kb(qatorlar))
+
+
 # ============================================================ saqlash
-async def _saqla(update: Update, uid: int):
+async def _saqla(update: Update, uid: int, avtomatik: bool = False):
     p = holat_p(uid)
     if not p or not p.get("chek"):
         await javob(update, "⌛️ Ma'lumot yo'qolgan. Eslatmani qaytadan yuboring.")
@@ -480,6 +576,8 @@ async def _saqla(update: Update, uid: int):
         izohlar.append("Tranzaksiya ID yo'q")
     if p.get("dublikat"):
         izohlar.append(f"Dublikat ogohlantirishi: {p['dublikat']['sabab']}")
+    if p.get("karta_ism_bilan") and p.get("karta_mos"):
+        izohlar.append("Karta ism bo'yicha topildi (raqam chekda yo'q)")
     if not p.get("karta_mos"):
         izohlar.append(f"Karta ro'yxatda yo'q: {d.get('qabul_karta')}")
     if d.get("izoh"):
@@ -676,6 +774,23 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await javob(update, "❌ Ro'yxat eskirgan. Eslatmani qaytadan yuboring.")
             return
         await _toliba_tanlandi(update, uid, taxmin[i])
+        return
+
+    if data.startswith("k:"):
+        tanlov = data[2:]
+        if tanlov == "none":
+            # Karta noma'lum → shubhali, davom etadi
+            holat_saqla(uid, karta=None, karta_mos=False, karta_ism_bilan=False,
+                        karta_hal=True, stage="tasdiq")
+        else:
+            i = int(tanlov)
+            royxat = p.get("karta_royxat") or []
+            if i >= len(royxat):
+                await javob(update, "❌ Ro'yxat eskirgan. Chekni qaytadan yuboring.")
+                return
+            holat_saqla(uid, karta=royxat[i], karta_mos=True,
+                        karta_ism_bilan=True, karta_hal=True, stage="tasdiq")
+        await _tasdiq_korsat(update, uid)
         return
 
     if data == "gm":
