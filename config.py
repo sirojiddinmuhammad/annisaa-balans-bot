@@ -17,12 +17,12 @@ ARXIV_CHANNEL_ID = int(os.environ.get("ARXIV_CHANNEL_ID", "-1003938684575"))
 # Chek o'qish modeli
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
-# ---------- Yangi CRM baza ID lari ----------
-TOLOVLAR_DB = "cf832f9b-0b30-430f-bc6a-7ca6c3f3bc02"
-TALABALAR_DB = "d9ce3228-ad86-49ed-b2fb-61319165eb82"
-GURUHLAR_DB = "1fa6f318-9629-4970-a2fd-4e133c02a204"
-YOZILISHLAR_DB = "83a9b84e-2ef0-4d9f-906e-a7584b702d4e"
-KARTALAR_DB = "b7134ca6-fe1e-4b2a-8351-3213eee41301"
+# ---------- Yangi CRM baza ID lari (DATABASE ID — /databases/{id}/query uchun) ----------
+TOLOVLAR_DB = "a8b11a13-b698-4dc3-9398-56bbefaa3c78"
+TALABALAR_DB = "b079bfbc-48c1-4b7a-a1f3-df7389647260"
+GURUHLAR_DB = "d15acd14-3436-4ac0-98bf-76d4ed714d0d"
+YOZILISHLAR_DB = "aa2dfb43-91a2-48fa-9f37-48792761f699"
+KARTALAR_DB = "937b5f13-3b9c-45df-89f9-0604a11e6886"
 
 # ---------- Maydon nomlari (Notion'da AYNAN shunday yozilgan) ----------
 # To'lovlar
