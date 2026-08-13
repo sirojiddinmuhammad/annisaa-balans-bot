@@ -125,3 +125,46 @@ def eslatmami(matn: str) -> bool:
         return False
     p = parse_eslatma(matn)
     return bool(p["toliba"] or p["guruh"])
+
+
+# ==================== YANGI CRM: moslashuvchan matn ajratish ====================
+def ajrat_ism_guruh(matn: str) -> dict:
+    """
+    Admin yuborgan erkin matndan ism va guruh nomini ajratadi.
+    Format qat'iy emas. Turli ko'rinishlarni qo'llab-quvvatlaydi:
+        "Kamila Obidova, 83-Fonetika"
+        "Kamila Obidova 83-Fonetika"
+        "Obidova Kamila | Fonetika"
+        "Kamila Obidova"
+    Qaytadi: {ism, guruh}
+      ism  — birinchi qism (odam ismi deb taxmin qilinadi)
+      guruh — ikkinchi qism (bo'lsa), guruh nomi
+
+    Ajratgich: vergul, tik chiziq, tire yoki yangi qator.
+    Agar ajratgich bo'lmasa — butun matn ism sifatida qaytadi
+    (bot baribir bazadagi ismlarga solishtiradi).
+    """
+    matn = (matn or "").strip()
+    if not matn:
+        return {"ism": "", "guruh": ""}
+
+    # Aniq ajratgichlar: vergul, |, yangi qator, ; yoki uzun tire
+    for sep in ["\n", ",", "|", ";", "—", " - "]:
+        if sep in matn:
+            qismlar = [q.strip() for q in matn.split(sep) if q.strip()]
+            if len(qismlar) >= 2:
+                return {"ism": qismlar[0], "guruh": qismlar[1]}
+            elif qismlar:
+                return {"ism": qismlar[0], "guruh": ""}
+
+    # Ajratgich yo'q. Guruh nomi odatda raqam yoki kurs so'zi bilan boshlanadi
+    # (masalan "83-Fonetika"). Shunga qarab bo'lishga urinamiz.
+    m = re.search(r"\s(\d{1,3}\s*[-.]?\s*[A-Za-zА-Яа-яЁёʼ']+.*)$", matn)
+    if m:
+        guruh = m.group(1).strip()
+        ism = matn[:m.start()].strip()
+        if ism:
+            return {"ism": ism, "guruh": guruh}
+
+    # Hech qanday ajratgich topilmadi — hammasi ism
+    return {"ism": matn, "guruh": ""}

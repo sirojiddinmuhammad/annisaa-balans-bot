@@ -1,4 +1,4 @@
-"""Annisaa Markazi — Chek boti konfiguratsiyasi."""
+"""Annisaa Markazi — Chek boti (yangi CRM) konfiguratsiyasi."""
 import os
 
 # ---------- Muhit o'zgaruvchilari (Railway → Variables) ----------
@@ -17,55 +17,55 @@ ARXIV_CHANNEL_ID = int(os.environ.get("ARXIV_CHANNEL_ID", "-1003938684575"))
 # Chek o'qish modeli
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
-# ---------- Notion baza ID lari ----------
-BALANS_DB = "528cde55-c8d4-4cf3-a23d-17f9b55b8b69"
-TOLIBALAR_DB = "4cf46df6-4639-4da3-bfd2-d7147ffde767"
-GURUHLAR_DB = "10f5fce8-a0b1-4513-84a3-d67c7bb99b9d"
-USTOZLAR_DB = "11b88936-578b-468d-9919-15cd5b527120"
-KARTALAR_DB = "361dd606-4e43-806a-8a5c-f09143dff90f"
-TOLOVLAR_DB = "64408559-326f-421e-830d-066a24024233"
+# ---------- Yangi CRM baza ID lari ----------
+TOLOVLAR_DB = "cf832f9b-0b30-430f-bc6a-7ca6c3f3bc02"
+TALABALAR_DB = "d9ce3228-ad86-49ed-b2fb-61319165eb82"
+GURUHLAR_DB = "1fa6f318-9629-4970-a2fd-4e133c02a204"
+YOZILISHLAR_DB = "83a9b84e-2ef0-4d9f-906e-a7584b702d4e"
+KARTALAR_DB = "b7134ca6-fe1e-4b2a-8351-3213eee41301"
 
 # ---------- Maydon nomlari (Notion'da AYNAN shunday yozilgan) ----------
-# Balans
+# To'lovlar
 P_NOMI = "Nomi"
-P_TOLIBA = "Toliba"
-P_GURUH = "Guruh"
-P_USTOZA = "Ustoza"
+P_TALABA = "Talaba"                 # → Talabalar
 P_SUMMA = "Summa"
-P_SANA = "Tolov sanasi"
-P_FIO = "Tolovchi FIO"
-P_KARTA = "Karta"
+P_SANA = "To'lov sanasi"
+P_KARTA = "Karta"                   # → Kartalar
 P_KARTA_MOS = "Karta mos keldi"
-P_TIZIM = "Tolov tizimi"
+P_TIZIM = "To'lov tizimi"
 P_TRX = "Tranzaksiya ID"
+P_FIO = "To'lovchi FIO"
+P_YUB_KARTA = "Yuboruvchi karta"
 P_CHEK = "Chek"
 P_CHEK_URL = "Chek havolasi"
-P_KUTILGAN = "Kutilgan summa"
-P_HOLAT = "Holat"
+P_TEKSHIR_URL = "Tekshirish havolasi"
 P_YOSH = "Chek yoshi (kun)"
 P_SHUBHALI = "Shubhali"
-P_TEKSHIR_URL = "Tekshirish havolasi"
 P_FAYL_ID = "Fayl ID"
 P_HASH = "Rasm hash"
 P_IZOH = "Izoh"
-P_YUB_KARTA = "Yuboruvchi karta"
 
-# Boshqa bazalar
-P_GURUH_NOMI = "Guruh nomi"          # Guruhlar (title)
-P_GURUH_USTOZA = "Ustozalar"          # Guruhlar → Ustozlar
-P_GURUH_NARX = "Oylik narxi"          # Guruhlar
-P_TOLIBA_NAME = "Name"                # Tolibalar (title)
-P_USTOZ_NAME = "Ustoz ismi"           # Ustozlar (title)
-P_KARTA_NOMI = "Karta nomi "          # Kartalar (title) — OXIRIDA PROBEL BOR
-P_KARTA_L4 = "Oxirgi 4 raqam"         # Kartalar
-P_KARTA_STATUS = "Status"             # Kartalar
-P_TOLOV_TOLIBA = "Toliba ismi"        # Tolovlar → Tolibalar
-P_TOLOV_GURUH = "Guruhlar"            # Tolovlar → Guruhlar
-P_TOLOV_ISM_ROLLUP = "Rollup_ismi"    # Tolovlar rollup (toliba ismi)
+# Talabalar
+P_TALABA_ISM = "Ism"                # title
+P_TALABA_TGID = "Telegram ID"       # text
+P_TALABA_TELEFON = "Telefon"
+P_TALABA_YOZILISH = "Yozilishlar"   # → Yozilishlar
+
+# Yozilishlar
+P_YOZ_TALABA = "Talaba"             # → Talabalar
+P_YOZ_GURUH = "Guruh"               # → Guruhlar
+P_YOZ_HOLAT = "Holat"               # O'qiyabdi / Ta'tilda / Tugatdi
+
+# Guruhlar
+P_GURUH_NOMI = "Guruh nomi"         # title
+
+# Kartalar
+P_KARTA_NOMI = "Karta nomi"         # title
+P_KARTA_L4 = "Oxirgi 4 raqam"
+P_KARTA_STATUS = "Status"           # Faol / Biriktirilmagan
 
 # ---------- Sozlamalar ----------
-PENDING_TTL = 30 * 60        # eslatma kutish muddati (soniya)
-SUMMA_TOLERANS = 1000        # shu farqgacha "To'liq" hisoblanadi
-ESKI_CHEK_KUN = 30           # shundan eski chek → ogohlantirish
+PENDING_TTL = 30 * 60        # kutish muddati (soniya)
+ESKI_CHEK_KUN = 30           # shundan eski chek → shubhali
 NOTION_MAX_FAYL = 5 * 1024 * 1024   # Notion Free reja chegarasi
-CACHE_TTL = 600              # guruh/karta ro'yxati kesh muddati
+CACHE_TTL = 600              # talaba/karta/guruh ro'yxati kesh muddati

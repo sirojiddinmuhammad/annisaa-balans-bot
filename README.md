@@ -1,101 +1,135 @@
-# 🧾 Annisaa Markazi — Chek boti
+# 🧾 Annisaa Markazi — Chek boti (yangi CRM)
 
-To'lov eslatmasi + chekni birlashtirib **Tolibalar Balansi** bazasiga yozadi.
+Admin talaba xabarini forward qiladi → bot talabani topadi → chek yuboriladi →
+**To'lovlar** bazasiga yozuv qo'shiladi.
 
 ---
 
-## 1. Railway sozlamalari
-
-**Variables** bo'limiga quyidagilarni qo'shing:
+## 1. Railway sozlamalari (Variables)
 
 | Nomi | Qiymati |
 |---|---|
-| `TELEGRAM_TOKEN` | @BotFather bergan token |
+| `TELEGRAM_TOKEN` | @BotFather bergan yangi bot tokeni |
 | `NOTION_TOKEN` | Notion integratsiya tokeni (`ntn_…`) |
 | `ANTHROPIC_API_KEY` | console.anthropic.com dan olingan kalit |
-| `ARXIV_CHANNEL_ID` | `-1003938684575` |
+| `ARXIV_CHANNEL_ID` | `-1003938684575` (eski kanal) |
 | `ADMIN_IDS` | Telegram ID laringiz, vergul bilan |
 | `CLAUDE_MODEL` | *(ixtiyoriy)* standart: `claude-haiku-4-5-20251001` |
 
-`ADMIN_IDS` ni bilmasangiz — botni ishga tushiring, `/start` bosing, bot sizga ID ingizni yozadi. Keyin Variables ga qo'ying va qayta deploy qiling.
+`ADMIN_IDS` ni bilmasangiz — botni ishga tushiring, `/start` bosing, bot ID ni yozadi.
 
-⚠️ `ADMIN_IDS` bo'sh qolsa **hammaga ochiq** bo'ladi. Albatta to'ldiring.
+⚠️ `ADMIN_IDS` bo'sh qolsa **hammaga ochiq** bo'ladi.
 
 ---
 
 ## 2. Notion integratsiyasi
 
-Integratsiya quyidagi bazalarga ulangan bo'lishi shart
+Integratsiya quyidagi bazalarga ulanishi shart
 (har bir bazada `···` → **Connections** → integratsiyani tanlang):
 
-- 💰 Tolibalar Balansi
-- 🎓 Tolibalar
-- 🚪 Guruhlar
-- Ustozlar
-- Kartalar
-- 💎 To'lovlar *(faqat o'qish uchun — guruhdagi tolibalarni topishga kerak)*
+- **To'lovlar** — yozish uchun
+- **Talabalar** — talabani topish + Telegram ID yozish uchun
+- **Guruhlar** — guruh nomi bo'yicha saralash uchun
+- **Yozilishlar** — talaba↔guruh bog'lanishi uchun
+- **💳 Kartalar** — qabul qiluvchi kartani topish uchun
 
 ---
 
-## 3. Telegram kanali
-
-Arxiv kanalda bot **admin** bo'lishi va **Post Messages** ruxsati bo'lishi kerak.
-
----
-
-## 4. Ishlatish
+## 3. Ishlatish
 
 ```
-1. To'lov eslatmasini botga repost qiling
-2. Bot tolibani/guruhni/ustozani topadi va tasdiqlaydi
+1. Talaba xabarini (chek/eslatma) botga FORWARD qiling
+   → forward'da Telegram ID bo'lsa: talaba avtomat topiladi
+   → bo'lmasa: bot ism so'raydi
+
+2. (Agar so'ralsa) ism + guruh yozing:
+   "Kamila Obidova, 83-Fonetika"
+   → bot topganini tugma bilan ko'rsatadi, tanlaysiz
+   → Telegram ID bo'sh bo'lsa avtomat saqlanadi
+
 3. Chekni yuboring (rasm yoki PDF)
-4. Bot chekni o'qiydi va tekshiruvlarni ko'rsatadi
-5. "Saqlash" → Balans bazasiga yoziladi
+   → bot o'qiydi, kartani tekshiradi
+   → hammasi aniq bo'lsa AVTOMAT saqlaydi
+   → topilmasa so'raydi (karta, sana)
 ```
 
 ### Buyruqlar
 
-| Buyruq | Vazifasi |
+| Buyruq | Vazifa |
 |---|---|
-| `/start` | Yo'riqnoma va Telegram ID |
-| `/bekor` | Kutishni bekor qilish |
-| `/kesh` | Guruh/karta ro'yxatini Notion'dan qayta o'qish |
+| `/start` | Yo'riqnoma + Telegram ID |
+| `/bekor` | Bekor qilish |
+| `/kesh` | Guruh/karta ro'yxatini yangilash |
 
-> Notion'da yangi guruh yoki karta qo'shsangiz — `/kesh` bosing.
-> Aks holda bot 10 daqiqagacha eski ro'yxatni ishlatadi.
+> Notion'da yangi karta yoki guruh qo'shsangiz — `/kesh` bosing.
 
 ---
 
-## 5. Tekshiruvlar
+## 4. Talabani qanday topadi
 
-Bot quyidagi hollarda ogohlantiradi va yozuvni **Shubhali ☑** deb belgilaydi:
+**1-usul — Telegram ID (aniq):**
+Forward'da talabaning Telegram ID si keladi → `Telegram ID` maydonidan qidiriladi.
+
+**2-usul — ism + guruh:**
+ID kelmasa (talaba maxfiylikni yopgan) → admin ism yozadi → bot Talabalar bazasidan
+qidiradi. Bir nechta bir xil ismli talaba bo'lsa, **guruh nomi** orqali to'g'risini
+ajratadi (Yozilishlar bazasi bo'yicha).
+
+**Telegram ID avtomat to'lib boradi:** forward'dan ID kelsa va talabaning
+`Telegram ID` maydoni bo'sh bo'lsa, bot uni yozib qo'yadi. Keyingi safar
+o'sha talaba forward qilinsa — darrov topiladi.
+
+---
+
+## 5. Chek va tekshiruvlar
+
+Bot faqat quyida **so'raydi**, aks holda avtomat saqlaydi:
 
 | Holat | Reaksiya |
 |---|---|
-| Karta ro'yxatda yo'q | 🚫 Saqlashdan oldin tasdiq so'raydi |
-| Tranzaksiya ID takrorlangan | 🚫 "Takroriy chek" — eski yozuvga havola |
-| Aynan shu rasm/fayl avval kelgan | 🚫 Takroriy |
-| Summa + sana + karta bir xil | 🚫 Takroriy |
-| Chek 30 kundan eski | 🚨 Tolibaning oxirgi to'lovini ko'rsatadi |
-| Chekda sana yo'q | 📅 Sanani so'raydi |
-| Chekda tranzaksiya ID yo'q | ⚠️ Shubhali |
-| Rasm noaniq | ⚠️ Shubhali |
-| To'lov tasdiqlanmagan | 🚫 Ogohlantiradi |
+| Karta topilmadi (raqam + ism) | Tugma bilan tanlash |
+| Chekda sana yo'q | `[Bugun] [Kecha] [Yozish]` |
+| Dublikat (takroriy chek) | `[Baribir saqlash] [Bekor]` |
 
-**Summa qoidasi:** doim *qabul qiluvchiga o'tgan* summa olinadi.
-Paynet kabi tizimlarda sarlavhada komissiya bilan birga ko'rsatiladi —
-bot uni ayirib tashlaydi.
+Quyidagilar **to'xtatmaydi**, faqat `Shubhali ☑` qiladi:
+tranzaksiya ID yo'q · karta ism bo'yicha topildi · chek noaniq ·
+chek 30 kundan eski · karta faol emas.
 
----
+**Summa qoidasi:** doim *qabul qiluvchiga o'tgan* summa
+(Paynet komissiyasi ayirib tashlanadi).
 
-## 6. Xarajat
-
-Chek o'qish uchun Claude API ishlatiladi.
-Bitta chek ≈ 2000 token. Haiku 4.5 narxida **1000 ta chek ≈ $2–3**.
+**Karta topish:** avval oxirgi 4 raqam → topilmasa ism bo'yicha
+(`Gulzoda X` → Gulzoda Xursandova).
 
 ---
 
-## 7. Mahalliy sinov
+## 6. To'lovlar bazasiga nima yoziladi
+
+`Talaba` (avtomat bog'lanadi), `Summa`, `To'lov sanasi`, `Karta`,
+`To'lov tizimi`, `Tranzaksiya ID`, `To'lovchi FIO`, `Yuboruvchi karta`,
+`Karta mos keldi`, `Chek` (fayl), `Chek havolasi`, `Tekshirish havolasi`,
+`Shubhali`, `Chek yoshi`, `Fayl ID`, `Rasm hash`, `Izoh`.
+
+> To'lov **umumiy balansga** tushadi. Balans/chegirma/holat —
+> Talabalar va Yozilishlar bazasidagi formulalar orqali avtomat hisoblanadi.
+
+---
+
+## 7. Fayllar
+
+| Fayl | Vazifa |
+|---|---|
+| `main.py` | Bot oqimi: forward, talaba topish, chek, saqlash |
+| `notion_api.py` | Notion: talaba/karta qidirish, dublikat, yozish |
+| `receipt_ai.py` | Chekni Claude orqali o'qish |
+| `eslatma_parser.py` | Matndan ism/guruh ajratish, ism solishtirish |
+| `config.py` | Baza ID lari va maydon nomlari |
+
+⚠️ Notion'da maydon nomini o'zgartirsangiz — `config.py` da ham o'zgartiring.
+
+---
+
+## 8. Mahalliy sinov
 
 ```bash
 pip install -r requirements.txt
@@ -106,18 +140,3 @@ export ARXIV_CHANNEL_ID=-1003938684575
 export ADMIN_IDS=123456789
 python main.py
 ```
-
----
-
-## 8. Fayllar
-
-| Fayl | Vazifasi |
-|---|---|
-| `main.py` | Bot mantiqi, suhbat oqimi |
-| `notion_api.py` | Notion bilan aloqa, qidiruv, dublikat |
-| `receipt_ai.py` | Chekni Claude orqali o'qish |
-| `parser.py` | Eslatma matnini tahlil, ism solishtirish |
-| `config.py` | Sozlamalar va maydon nomlari |
-
-⚠️ Notion'da maydon nomlarini o'zgartirsangiz — `config.py` da ham
-o'zgartiring, aks holda bot topa olmaydi.

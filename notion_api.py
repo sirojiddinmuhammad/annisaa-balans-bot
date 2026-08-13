@@ -1,10 +1,10 @@
-"""Notion API bilan ishlash qatlami."""
+"""Notion API bilan ishlash qatlami (yangi CRM)."""
 import time
 import logging
 import httpx
 
 import config as C
-from eslatma_parser import oxshashlik, ustoza_toza
+from eslatma_parser import oxshashlik
 
 log = logging.getLogger(__name__)
 
@@ -42,41 +42,39 @@ async def _query_all(db_id: str, filter_=None, page_size=100):
         if not data.get("has_more"):
             break
         cursor = data.get("next_cursor")
-        if len(natija) > 3000:      # xavfsizlik chegarasi
+        if len(natija) > 5000:
             break
     return natija
 
 
-def _title(sahifa: dict, prop: str) -> str:
+def _title(sahifa, prop):
     p = sahifa.get("properties", {}).get(prop) or {}
-    parts = p.get("title") or []
-    return "".join(x.get("plain_text", "") for x in parts).strip()
+    return "".join(x.get("plain_text", "") for x in (p.get("title") or [])).strip()
 
 
-def _text(sahifa: dict, prop: str) -> str:
+def _text(sahifa, prop):
     p = sahifa.get("properties", {}).get(prop) or {}
-    parts = p.get("rich_text") or []
-    return "".join(x.get("plain_text", "") for x in parts).strip()
+    return "".join(x.get("plain_text", "") for x in (p.get("rich_text") or [])).strip()
 
 
-def _number(sahifa: dict, prop: str):
+def _number(sahifa, prop):
     p = sahifa.get("properties", {}).get(prop) or {}
     return p.get("number")
 
 
-def _relation_ids(sahifa: dict, prop: str) -> list:
+def _relation_ids(sahifa, prop):
     p = sahifa.get("properties", {}).get(prop) or {}
     return [x["id"] for x in (p.get("relation") or [])]
 
 
-def _status(sahifa: dict, prop: str) -> str:
+def _select(sahifa, prop):
     p = sahifa.get("properties", {}).get(prop) or {}
-    st = p.get("status") or p.get("select")
+    st = p.get("select") or p.get("status")
     return (st or {}).get("name", "")
 
 
 # ---------------------------------------------------------------- keshlar
-async def _keshlangan(kalit: str, olish):
+async def _keshlangan(kalit, olish):
     yozuv = _kesh.get(kalit)
     if yozuv and time.time() - yozuv[0] < C.CACHE_TTL:
         return yozuv[1]
@@ -85,35 +83,15 @@ async def _keshlangan(kalit: str, olish):
     return qiymat
 
 
-async def ustozlar() -> dict:
-    """{page_id: ustoz_ismi}"""
+async def guruhlar_map():
+    """{guruh_id: guruh_nomi}"""
     async def olish():
-        sahifalar = await _query_all(C.USTOZLAR_DB)
-        return {s["id"]: _title(s, C.P_USTOZ_NAME) for s in sahifalar}
-    return await _keshlangan("ustozlar", olish)
-
-
-async def guruhlar() -> list:
-    """[{id, nomi, narx, ustoza_id, ustoza_nomi, status}]"""
-    async def olish():
-        u = await ustozlar()
         sahifalar = await _query_all(C.GURUHLAR_DB)
-        out = []
-        for s in sahifalar:
-            uid = (_relation_ids(s, C.P_GURUH_USTOZA) or [None])[0]
-            out.append({
-                "id": s["id"],
-                "nomi": _title(s, C.P_GURUH_NOMI),
-                "narx": _number(s, C.P_GURUH_NARX),
-                "ustoza_id": uid,
-                "ustoza_nomi": u.get(uid, ""),
-                "status": _status(s, "Status"),
-            })
-        return out
+        return {s["id"]: _title(s, C.P_GURUH_NOMI) for s in sahifalar}
     return await _keshlangan("guruhlar", olish)
 
 
-async def kartalar() -> list:
+async def kartalar():
     """[{id, nomi, l4, status}]"""
     async def olish():
         sahifalar = await _query_all(C.KARTALAR_DB)
@@ -124,7 +102,7 @@ async def kartalar() -> list:
                 "id": s["id"],
                 "nomi": _title(s, C.P_KARTA_NOMI),
                 "l4": "".join(ch for ch in l4 if ch.isdigit()).zfill(4) if l4 else "",
-                "status": _status(s, C.P_KARTA_STATUS),
+                "status": _select(s, C.P_KARTA_STATUS),
             })
         return out
     return await _keshlangan("kartalar", olish)
@@ -134,114 +112,149 @@ def keshni_tozala():
     _kesh.clear()
 
 
-# ---------------------------------------------------------------- qidirish
-async def guruh_top(nomi: str, ustoza: str = "", n=5):
-    """
-    Guruhni nomi (va ustoza ismi) bo'yicha qidiradi.
-    Qaytadi: (aniq_moslik | None, taxminlar_royxati)
-    """
-    barcha = await guruhlar()
-    u_toza = ustoza_toza(ustoza)
-
-    ballar = []
-    for g in barcha:
-        b = oxshashlik(nomi, g["nomi"])
-        # Ustoza mos kelsa ball ko'tariladi
-        if u_toza and g["ustoza_nomi"]:
-            ub = oxshashlik(u_toza, ustoza_toza(g["ustoza_nomi"]))
-            b = b * 0.75 + ub * 0.25
-            if ub > 0.85:
-                b += 0.08
-        # Yopilgan guruhlar pastga
-        if "yopilgan" in (g["status"] or "").lower():
-            b -= 0.15
-        ballar.append((b, g))
-
-    ballar.sort(key=lambda x: -x[0])
-    eng_yaxshi = ballar[0] if ballar else None
-
-    aniq = None
-    if eng_yaxshi:
-        # Nomi aynan bir xil bo'lsa — darrov tanlanadi
-        toliq = [g for b, g in ballar if b >= 0.995]
-        if len(toliq) == 1:
-            aniq = toliq[0]
-        elif eng_yaxshi[0] >= 0.90 and (
-                len(ballar) < 2 or eng_yaxshi[0] - ballar[1][0] >= 0.08):
-            aniq = eng_yaxshi[1]
-
-    return aniq, [g for _, g in ballar[:n]]
+# ---------------------------------------------------------------- talaba topish
+async def talaba_tgid(tg_id):
+    """Telegram ID bo'yicha talabani topadi (aniq usul)."""
+    if not tg_id:
+        return None
+    filter_ = {"property": C.P_TALABA_TGID, "rich_text": {"equals": str(tg_id)}}
+    res = await _query_all(C.TALABALAR_DB, filter_, page_size=5)
+    if not res:
+        return None
+    s = res[0]
+    return {"id": s["id"], "ism": _title(s, C.P_TALABA_ISM),
+            "tgid": _text(s, C.P_TALABA_TGID)}
 
 
-async def guruh_tolibalari(guruh_id: str) -> list:
-    """
-    Guruhdagi tolibalar. Tolibalar bazasi Guruhlar bilan to'g'ridan-to'g'ri
-    bog'lanmagan — aloqa To'lovlar bazasi orqali boradi.
-    Qaytadi: [{id, nomi}]
-    """
-    filter_ = {"property": C.P_TOLOV_GURUH, "relation": {"contains": guruh_id}}
-    yozuvlar = await _query_all(C.TOLOVLAR_DB, filter_)
-
-    topilgan: dict = {}
+async def _talaba_guruhlari(talaba_id):
+    """Talabaning yozilishlaridagi guruh nomlari va holati.
+    Qaytadi: [{guruh_nomi, holat}]"""
+    filter_ = {"property": C.P_YOZ_TALABA, "relation": {"contains": talaba_id}}
+    yozuvlar = await _query_all(C.YOZILISHLAR_DB, filter_)
+    gmap = await guruhlar_map()
+    out = []
     for y in yozuvlar:
-        ids = _relation_ids(y, C.P_TOLOV_TOLIBA)
-        if not ids:
-            continue
-        tid = ids[0]
-        if tid in topilgan:
-            continue
-        # Rollup orqali ismni olishga harakat qilamiz (qo'shimcha so'rovsiz)
-        ism = ""
-        rp = y.get("properties", {}).get(C.P_TOLOV_ISM_ROLLUP) or {}
-        arr = (rp.get("rollup") or {}).get("array") or []
-        for el in arr:
-            if el.get("type") == "title":
-                ism = "".join(x.get("plain_text", "") for x in el["title"]).strip()
-                break
-        topilgan[tid] = ism
-
-    # Rollup ishlamagan holatlar uchun sahifadan o'qiymiz
-    for tid, ism in list(topilgan.items()):
-        if not ism:
-            try:
-                s = await _req("GET", f"/pages/{tid}")
-                topilgan[tid] = _title(s, C.P_TOLIBA_NAME)
-            except Exception:
-                topilgan[tid] = "(nomsiz)"
-
-    return [{"id": k, "nomi": v} for k, v in topilgan.items() if v]
+        gids = _relation_ids(y, C.P_YOZ_GURUH)
+        holat = _select(y, C.P_YOZ_HOLAT)
+        for gid in gids:
+            out.append({"guruh_nomi": gmap.get(gid, ""), "holat": holat})
+    return out
 
 
-async def toliba_top(ism: str, guruh_id: str = None, n=5):
+async def talaba_izla(ism, guruh_matn="", n=6):
     """
-    Tolibani qidiradi. Guruh berilgan bo'lsa — faqat shu guruh ichidan.
-    Qaytadi: (aniq_moslik | None, taxminlar)
+    Ism (va ixtiyoriy guruh nomi) bo'yicha talabani qidiradi.
+    Guruh nomi berilsa — o'sha guruhda o'qiyotgan talaba yuqoriga chiqadi.
+    Qaytadi: (aniq_moslik | None, taxminlar_royxati)
+      taxmin: {id, ism, guruhlar: [nomi], mos_guruh: bool}
     """
-    if guruh_id:
-        nomzodlar = await guruh_tolibalari(guruh_id)
-    else:
-        filter_ = {"property": C.P_TOLIBA_NAME, "title": {"contains": ism.split()[0]}}
-        sahifalar = await _query_all(C.TOLIBALAR_DB, filter_)
-        nomzodlar = [{"id": s["id"], "nomi": _title(s, C.P_TOLIBA_NAME)}
-                     for s in sahifalar]
-
-    if not nomzodlar:
+    if not ism or len(ism.strip()) < 2:
         return None, []
 
-    ballar = sorted(((oxshashlik(ism, t["nomi"]), t) for t in nomzodlar),
-                    key=lambda x: -x[0])
+    # Ism bo'yicha nomzodlarni olamiz (birinchi so'z bilan filtr)
+    birinchi = ism.strip().split()[0]
+    filter_ = {"property": C.P_TALABA_ISM, "title": {"contains": birinchi}}
+    sahifalar = await _query_all(C.TALABALAR_DB, filter_, page_size=50)
+    if not sahifalar:
+        # Kengroq — butun bazadan
+        sahifalar = await _query_all(C.TALABALAR_DB)
+
+    nomzodlar = []
+    for s in sahifalar:
+        nomzodlar.append({
+            "id": s["id"],
+            "ism": _title(s, C.P_TALABA_ISM),
+            "tgid": _text(s, C.P_TALABA_TGID),
+        })
+
+    # Ism o'xshashligi bo'yicha ball
+    ballar = []
+    for t in nomzodlar:
+        b = oxshashlik(ism, t["ism"])
+        if b >= 0.55:
+            ballar.append([b, t])
+
+    if not ballar:
+        return None, []
+
+    # Guruh nomi berilgan bo'lsa — yuqori balli nomzodlarning guruhini tekshiramiz
+    guruh_matn = (guruh_matn or "").strip()
+    if guruh_matn:
+        for juft in ballar[:8]:      # faqat yuqori nomzodlar uchun (tejamkor)
+            b, t = juft
+            guruhlar = await _talaba_guruhlari(t["id"])
+            t["guruhlar"] = [g["guruh_nomi"] for g in guruhlar if g["guruh_nomi"]]
+            t["mos_guruh"] = False
+            for g in guruhlar:
+                if not g["guruh_nomi"]:
+                    continue
+                gb = oxshashlik(guruh_matn, g["guruh_nomi"])
+                # qism-nom ham hisobga olinadi (matnda qisqartma bo'lishi mumkin)
+                if gb >= 0.6 or _qism_mos(guruh_matn, g["guruh_nomi"]):
+                    t["mos_guruh"] = True
+                    juft[0] += 0.5           # guruh mos kelsa ballni ko'taramiz
+                    if "o'qiy" in (g["holat"] or "").lower():
+                        juft[0] += 0.1       # faol yozilish ustun
+                    break
+    else:
+        for juft in ballar[:8]:
+            juft[1]["guruhlar"] = []
+            juft[1]["mos_guruh"] = False
+
+    ballar.sort(key=lambda x: -x[0])
     eng = ballar[0]
+
+    # Aniq moslik sharti
     aniq = None
-    toliq = [t for b, t in ballar if b >= 0.995]
-    if len(toliq) == 1:
-        aniq = toliq[0]
-    elif eng[0] >= 0.88 and (len(ballar) < 2 or eng[0] - ballar[1][0] >= 0.10):
+    # Guruh mos kelgan yagona nomzod bo'lsa — aniq
+    guruh_moslar = [t for b, t in ballar if t.get("mos_guruh")]
+    if len(guruh_moslar) == 1 and eng[1].get("mos_guruh"):
         aniq = eng[1]
+    elif eng[0] >= 0.9 and (len(ballar) < 2 or eng[0] - ballar[1][0] >= 0.15):
+        aniq = eng[1]
+
     return aniq, [t for _, t in ballar[:n]]
 
 
-async def karta_top(l4: str):
-    """Oxirgi 4 raqam bo'yicha kartani topadi (aniq usul)."""
+def _qism_mos(matn, guruh_nomi):
+    """Matnda guruh nomining bir qismi bormi (masalan '83-Fonetika' ↔ 'Fonetika')."""
+    from eslatma_parser import _normalize
+    m = _normalize(matn)
+    g = _normalize(guruh_nomi)
+    if not m or not g:
+        return False
+    # guruh nomining har bir 'so'zi' matnda bormi
+    g_soz = [x for x in g.split() if len(x) >= 3]
+    if not g_soz:
+        return False
+    topildi = sum(1 for x in g_soz if x in m)
+    return topildi >= 1
+
+
+# ---------------------------------------------------------------- Telegram ID yozish
+async def tgid_yoz(talaba_id, tg_id):
+    """Talabaning Telegram ID maydoni bo'sh bo'lsa — yozib qo'yadi."""
+    if not tg_id:
+        return False
+    try:
+        s = await _req("GET", f"/pages/{talaba_id}")
+        mavjud = _text(s, C.P_TALABA_TGID)
+        if mavjud:
+            return False        # allaqachon bor, tegmaymiz
+        await _req("PATCH", f"/pages/{talaba_id}", {
+            "properties": {
+                C.P_TALABA_TGID: {"rich_text": [{"text": {"content": str(tg_id)}}]}
+            }
+        })
+        return True
+    except Exception as e:
+        log.warning("Telegram ID yozilmadi: %s", e)
+        return False
+
+
+# ---------------------------------------------------------------- karta
+async def karta_top(l4):
+    """Oxirgi 4 raqam bo'yicha kartani topadi."""
     if not l4:
         return None
     l4 = "".join(ch for ch in str(l4) if ch.isdigit()).zfill(4)
@@ -251,39 +264,26 @@ async def karta_top(l4: str):
     return None
 
 
-def _karta_ism_balli(qidiruv: str, karta_nomi: str) -> float:
-    """
-    Kartani ism bo'yicha solishtirish.
-    Chekda ism turli shaklda bo'ladi:
-      'Gulzoda X'      → 'Gulzoda Xursandova'
-      'Xursandova G'   → 'Gulzoda Xursandova'
-      'XURSANDOVA'     → 'Gulzoda Xursandova'
-    Bosh harf (masalan 'X') prefiks sifatida tekshiriladi.
-    """
+def _karta_ism_balli(qidiruv, karta_nomi):
+    """Kartani ism bo'yicha solishtirish (bosh harf ham hisobga olinadi)."""
     from eslatma_parser import _normalize
     q = _normalize(qidiruv)
     n = _normalize(karta_nomi)
     if not q or not n:
         return 0.0
-
-    q_soz = q.split()
-    n_soz = n.split()
+    q_soz, n_soz = q.split(), n.split()
     if not q_soz or not n_soz:
         return 0.0
-
-    # Har bir qidiruv so'zini karta so'zlariga moslashtiramiz
-    mos = 0
-    ishlatilgan = set()
+    mos, ishlatilgan = 0, set()
     for qs in q_soz:
-        eng = 0.0
-        eng_idx = -1
+        eng, eng_idx = 0.0, -1
         for i, ns in enumerate(n_soz):
             if i in ishlatilgan:
                 continue
             if qs == ns:
                 ball = 1.0
             elif len(qs) == 1 and ns.startswith(qs):
-                ball = 0.9              # 'x' → 'xursandova'
+                ball = 0.9
             elif len(ns) == 1 and qs.startswith(ns):
                 ball = 0.9
             elif ns.startswith(qs) or qs.startswith(ns):
@@ -295,20 +295,14 @@ def _karta_ism_balli(qidiruv: str, karta_nomi: str) -> float:
         if eng >= 0.8:
             mos += 1
             ishlatilgan.add(eng_idx)
-
-    # Qancha qidiruv so'zi mos keldi (0..1)
     return mos / len(q_soz)
 
 
-async def karta_top_ism(qabul_fio: str):
-    """
-    Kartani qabul qiluvchi ismi bo'yicha topadi.
-    Qaytadi: (karta | None, koplik_bormi)
-      koplik_bormi=True → bir nechta karta mos keldi, tanlash kerak
-    """
+async def karta_top_ism(qabul_fio):
+    """Kartani qabul qiluvchi ismi bo'yicha topadi.
+    Qaytadi: (karta | None, koplik_bormi)"""
     if not qabul_fio or len(qabul_fio.strip()) < 2:
         return None, False
-
     ballar = []
     for k in await kartalar():
         if not k["nomi"]:
@@ -316,27 +310,21 @@ async def karta_top_ism(qabul_fio: str):
         b = _karta_ism_balli(qabul_fio, k["nomi"])
         if b >= 0.75:
             ballar.append((b, k))
-
     if not ballar:
         return None, False
     ballar.sort(key=lambda x: -x[0])
-
-    # Faqat bittasi yuqori ball olsa — aniq
     yuqori = [k for b, k in ballar if b >= 0.75]
     if len(yuqori) == 1:
         return yuqori[0], False
-    # Bir nechta mos keldi, lekin bittasi aniq ustun bo'lsa
     if len(ballar) >= 2 and ballar[0][0] - ballar[1][0] >= 0.25:
         return ballar[0][1], False
-    return None, True      # bir nechta — tanlash kerak
+    return None, True
 
 
 # ---------------------------------------------------------------- dublikat
 async def dublikat_izla(trx=None, fayl_id=None, hash_=None,
                         summa=None, sana=None, karta_id=None):
-    """
-    Takroriy chekni qidiradi. Topilsa (sabab, yozuv) qaytadi.
-    """
+    """Takroriy chekni qidiradi. Topilsa (sabab, yozuv)."""
     tekshiruvlar = []
     if trx:
         tekshiruvlar.append(("Tranzaksiya ID",
@@ -347,35 +335,29 @@ async def dublikat_izla(trx=None, fayl_id=None, hash_=None,
     if hash_:
         tekshiruvlar.append(("Aynan shu rasm",
                              {"property": C.P_HASH, "rich_text": {"equals": hash_}}))
-
     for sabab, f in tekshiruvlar:
-        res = await _query_all(C.BALANS_DB, f, page_size=5)
+        res = await _query_all(C.TOLOVLAR_DB, f, page_size=5)
         if res:
             return sabab, res[0]
-
-    # Zaxira: summa + sana + karta birikmasi
     if summa and sana and karta_id:
         f = {"and": [
             {"property": C.P_SUMMA, "number": {"equals": summa}},
             {"property": C.P_SANA, "date": {"equals": sana[:10]}},
             {"property": C.P_KARTA, "relation": {"contains": karta_id}},
         ]}
-        res = await _query_all(C.BALANS_DB, f, page_size=5)
+        res = await _query_all(C.TOLOVLAR_DB, f, page_size=5)
         if res:
             return "Summa + sana + karta bir xil", res[0]
-
     return None, None
 
 
-async def oxirgi_tolov(toliba_id: str):
-    """Tolibaning Balansdagi oxirgi to'lovi (sana, summa)."""
-    f = {"property": C.P_TOLIBA, "relation": {"contains": toliba_id}}
-    body = {
-        "filter": f,
-        "sorts": [{"property": C.P_SANA, "direction": "descending"}],
-        "page_size": 1,
-    }
-    data = await _req("POST", f"/databases/{C.BALANS_DB}/query", body)
+async def oxirgi_tolov(talaba_id):
+    """Talabaning oxirgi to'lovi (sana, summa)."""
+    f = {"property": C.P_TALABA, "relation": {"contains": talaba_id}}
+    body = {"filter": f,
+            "sorts": [{"property": C.P_SANA, "direction": "descending"}],
+            "page_size": 1}
+    data = await _req("POST", f"/databases/{C.TOLOVLAR_DB}/query", body)
     res = data.get("results") or []
     if not res:
         return None
@@ -385,27 +367,20 @@ async def oxirgi_tolov(toliba_id: str):
 
 
 # ---------------------------------------------------------------- fayl yuklash
-async def fayl_yukla(nomi: str, content_type: str, baytlar: bytes):
-    """
-    Notion'ga fayl yuklaydi (3 qadam) va file_upload id qaytaradi.
-    Xato bo'lsa None qaytadi — yozuv baribir saqlanadi.
-    """
+async def fayl_yukla(nomi, content_type, baytlar):
+    """Notion'ga fayl yuklaydi, file_upload id qaytaradi. Xato → None."""
     if len(baytlar) > C.NOTION_MAX_FAYL:
-        log.warning("Fayl juda katta (%s bayt), Notion'ga yuklanmaydi", len(baytlar))
+        log.warning("Fayl juda katta (%s bayt)", len(baytlar))
         return None
     try:
-        boshlash = await _req("POST", "/file_uploads", {
-            "filename": nomi,
-            "content_type": content_type,
-        })
-        upload_url = boshlash["upload_url"]
+        boshlash = await _req("POST", "/file_uploads",
+                              {"filename": nomi, "content_type": content_type})
         async with httpx.AsyncClient(timeout=90) as cli:
             r = await cli.post(
-                upload_url,
+                boshlash["upload_url"],
                 headers={"Authorization": f"Bearer {C.NOTION_TOKEN}",
                          "Notion-Version": "2022-06-28"},
-                files={"file": (nomi, baytlar, content_type)},
-            )
+                files={"file": (nomi, baytlar, content_type)})
         if r.status_code >= 400:
             log.error("Fayl yuklash xatosi: %s %s", r.status_code, r.text[:300])
             return None
@@ -415,14 +390,13 @@ async def fayl_yukla(nomi: str, content_type: str, baytlar: bytes):
         return None
 
 
-# ---------------------------------------------------------------- yozuv yaratish
-async def balans_yozuv(d: dict):
+# ---------------------------------------------------------------- to'lov yozuvi
+async def tolov_yozuv(d):
     """
-    Balans bazasiga yangi yozuv qo'shadi.
-    d ichida: nomi, toliba_id, guruh_id, ustoza_id, summa, sana(ISO), vaqt,
-              fio, karta_id, karta_mos, tizim, trx, chek_url, kutilgan,
-              holat, yosh, shubhali, tekshir_url, fayl_id, hash, izoh,
-              yub_karta, file_upload_id
+    To'lovlar bazasiga yangi yozuv qo'shadi.
+    d: nomi, talaba_id, summa, sana, fio, karta_id, karta_mos, tizim, trx,
+       chek_url, tekshir_url, yosh, shubhali, fayl_id, hash, izoh,
+       yub_karta, file_upload_id, fayl_nomi
     """
     props = {C.P_NOMI: {"title": [{"text": {"content": d["nomi"][:200]}}]}}
 
@@ -442,22 +416,16 @@ async def balans_yozuv(d: dict):
         if qiymat:
             props[prop] = {"url": qiymat}
 
-    rel(C.P_TOLIBA, d.get("toliba_id"))
-    rel(C.P_GURUH, d.get("guruh_id"))
-    rel(C.P_USTOZA, d.get("ustoza_id"))
+    rel(C.P_TALABA, d.get("talaba_id"))
     rel(C.P_KARTA, d.get("karta_id"))
-
     num(C.P_SUMMA, d.get("summa"))
-    num(C.P_KUTILGAN, d.get("kutilgan"))
     num(C.P_YOSH, d.get("yosh"))
-
     txt(C.P_FIO, d.get("fio"))
     txt(C.P_TRX, d.get("trx"))
     txt(C.P_FAYL_ID, d.get("fayl_id"))
     txt(C.P_HASH, d.get("hash"))
     txt(C.P_IZOH, d.get("izoh"))
     txt(C.P_YUB_KARTA, d.get("yub_karta"))
-
     url(C.P_CHEK_URL, d.get("chek_url"))
     url(C.P_TEKSHIR_URL, d.get("tekshir_url"))
 
@@ -465,8 +433,6 @@ async def balans_yozuv(d: dict):
         props[C.P_SANA] = {"date": {"start": d["sana"]}}
     if d.get("tizim"):
         props[C.P_TIZIM] = {"select": {"name": d["tizim"]}}
-    if d.get("holat"):
-        props[C.P_HOLAT] = {"select": {"name": d["holat"]}}
 
     props[C.P_KARTA_MOS] = {"checkbox": bool(d.get("karta_mos"))}
     props[C.P_SHUBHALI] = {"checkbox": bool(d.get("shubhali"))}
@@ -479,6 +445,6 @@ async def balans_yozuv(d: dict):
         }]}
 
     return await _req("POST", "/pages", {
-        "parent": {"database_id": C.BALANS_DB},
+        "parent": {"database_id": C.TOLOVLAR_DB},
         "properties": props,
     })
