@@ -91,13 +91,21 @@ def _forward_id(update: Update):
     fo = getattr(m, "forward_origin", None)
     if fo is not None:
         # Yangi Telegram API — forward_origin
+        turi = type(fo).__name__
         user = getattr(fo, "sender_user", None)
         if user is not None:
+            log.info("Forward origin=%s, user_id=%s", turi, user.id)
             return user.id, getattr(user, "full_name", None)
+        # HiddenUser — foydalanuvchi maxfiylikni yopgan
+        nomi = getattr(fo, "sender_user_name", None)
+        log.info("Forward origin=%s (ID yashirin), nomi=%s", turi, nomi)
+        return None, nomi
     # Eski API — forward_from
     ff = getattr(m, "forward_from", None)
     if ff is not None:
+        log.info("Forward_from user_id=%s", ff.id)
         return ff.id, getattr(ff, "full_name", None)
+    log.info("Forward ma'lumoti yo'q (forward_origin va forward_from bo'sh)")
     return None, None
 
 
@@ -745,8 +753,14 @@ async def _saqla(update: Update, uid: int):
         try:
             if await N.tgid_yoz(p["talaba_id"], p["forward_tgid"]):
                 yozilgan_id = p["forward_tgid"]
-        except Exception:
-            pass
+                log.info("Telegram ID yozildi: talaba=%s id=%s",
+                         p.get("talaba_nomi"), p["forward_tgid"])
+            else:
+                log.info("Telegram ID yozilmadi (allaqachon bor yoki xato)")
+        except Exception as ex:
+            log.warning("tgid_yoz xatosi: %s", ex)
+    else:
+        log.info("forward_tgid yo'q — Telegram ID yozilmaydi")
 
     # Notion'ga fayl yuklash
     upload_id = None
