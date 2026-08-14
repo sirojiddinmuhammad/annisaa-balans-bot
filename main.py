@@ -148,6 +148,20 @@ async def _talaba_tanlandi(update: Update, uid: int, talaba: dict,
     """Talaba aniqlangach — chekni kutish holatiga o'tadi."""
     p = holat_saqla(uid, talaba_id=talaba["id"], talaba_nomi=talaba["ism"])
 
+    # Telegram ID ni DARROV yozamiz (forward'dan kelgan va bazada bo'sh bo'lsa).
+    # Bu yerda yozsak, keyin holat almashsa ham ID yo'qolmaydi.
+    if p.get("forward_tgid") and not p.get("tgid_yozildi"):
+        try:
+            if await N.tgid_yoz(talaba["id"], p["forward_tgid"]):
+                yozilgan_id = p["forward_tgid"]
+                holat_saqla(uid, tgid_yozildi=True, tgid_natija=p["forward_tgid"])
+                log.info("Telegram ID DARROV yozildi: %s → %s",
+                         talaba["ism"], p["forward_tgid"])
+            else:
+                log.info("Telegram ID yozilmadi (bor yoki xato): %s", talaba["ism"])
+        except Exception as ex:
+            log.warning("tgid_yoz (darrov) xatosi: %s", ex)
+
     ekstra = ""
     if yozilgan_id:
         ekstra = f"\n📝 Telegram ID saqlandi: <code>{yozilgan_id}</code>"
@@ -207,10 +221,13 @@ async def _forward_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if talaba:
         holat_saqla(uid, forward_tgid=tg_id)
+        log.info("Forward: talaba TOPILDI (ID li) — %s, forward_tgid=%s saqlandi",
+                 talaba["ism"], tg_id)
         await _talaba_tanlandi(update, uid, talaba)
     else:
         # ID yangi — talaba bazada bor, lekin ID yozilmagan. Ism bilan qidiramiz.
         holat_saqla(uid, stage="ism_kutish", forward_tgid=tg_id, forward_ism=ism)
+        log.info("Forward: talaba TOPILMADI (ID yangi=%s), ism so'raladi", tg_id)
         matn = ("🆕 Bu Telegram ID bazada yo'q.\n\n")
         if ism:
             matn += f"Forward'dagi ism: <b>{e(ism)}</b>\n\n"
@@ -747,20 +764,17 @@ async def _saqla(update: Update, uid: int):
 
     await javob(update, "💾 Notion'ga yozilmoqda…")
 
-    # Telegram ID ni yozib qo'yish (bo'sh bo'lsa)
-    yozilgan_id = None
-    if p.get("forward_tgid"):
+    # Telegram ID: agar talaba tanlanganda darrov yozilgan bo'lsa — o'shani olamiz.
+    # Bo'lmasa (masalan forward+chek birga kelib darrov yozilmagan bo'lsa) — shu yerda.
+    yozilgan_id = p.get("tgid_natija")
+    if not yozilgan_id and p.get("forward_tgid") and not p.get("tgid_yozildi"):
         try:
             if await N.tgid_yoz(p["talaba_id"], p["forward_tgid"]):
                 yozilgan_id = p["forward_tgid"]
-                log.info("Telegram ID yozildi: talaba=%s id=%s",
+                log.info("Telegram ID yozildi (saqlashda): talaba=%s id=%s",
                          p.get("talaba_nomi"), p["forward_tgid"])
-            else:
-                log.info("Telegram ID yozilmadi (allaqachon bor yoki xato)")
         except Exception as ex:
             log.warning("tgid_yoz xatosi: %s", ex)
-    else:
-        log.info("forward_tgid yo'q — Telegram ID yozilmaydi")
 
     # Notion'ga fayl yuklash
     upload_id = None
