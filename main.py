@@ -160,9 +160,16 @@ async def _forward_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Forward qilingan xabar — Telegram ID orqali talaba topish."""
     uid = update.effective_user.id
     tg_id, ism = _forward_id(update)
+    p = holat_p(uid)
+    bolishda = p and p.get("bolish") and \
+        (p.get("stage") in ("bolish_talaba", "bolish_talaba_tanlash"))
 
     if not tg_id:
         # Forward ID yashiringan — admin ism yuborishi kerak
+        if bolishda:
+            await javob(update,
+                        "🔒 Forward'da ID yo'q. Talaba ismini yozing:")
+            return
         holat_saqla(uid, stage="ism_kutish", forward_tgid=None)
         await javob(update,
                     "🔒 Forward'da Telegram ID ko'rinmadi "
@@ -181,13 +188,21 @@ async def _forward_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await kutish.delete()
 
+    # Bo'lish rejimida — topilgan talabani bo'lishga qo'shamiz
+    if bolishda:
+        if talaba:
+            await _bolish_talaba_tanlandi(update, uid, talaba)
+        else:
+            await javob(update,
+                        "🆕 Bu ID bazada yo'q. Talaba ismini yozing:")
+        return
+
     if talaba:
         holat_saqla(uid, forward_tgid=tg_id)
         await _talaba_tanlandi(update, uid, talaba)
     else:
         # ID yangi — talaba bazada bor, lekin ID yozilmagan. Ism bilan qidiramiz.
         holat_saqla(uid, stage="ism_kutish", forward_tgid=tg_id, forward_ism=ism)
-        qatorlar = None
         matn = ("🆕 Bu Telegram ID bazada yo'q.\n\n")
         if ism:
             matn += f"Forward'dagi ism: <b>{e(ism)}</b>\n\n"
@@ -296,11 +311,8 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 pass
 
     p = holat_p(uid)
-    if not p or not p.get("talaba_id"):
-        await javob(update,
-                    "❗️ Avval talabani aniqlang.\n"
-                    "Talaba xabarini forward qiling yoki ismini yozing.")
-        return
+    # Chek talabasiz ham qabul qilinadi — "necha talaba" keyin so'raladi.
+    # (oddiy holatda talaba oldin forward qilingan bo'ladi, bo'lishda esa yo'q)
 
     kutish = await update.effective_message.reply_text("🧾 Chek o'qilmoqda…")
 
@@ -345,10 +357,211 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     holat_saqla(uid, chek=d, chek_url=chek_url, hash=hash_,
-                fayl_unique=fayl_unique, fayl_nomi=nomi, mime=mime, baytlar=baytlar,
-                stage="tasdiq")
+                fayl_unique=fayl_unique, fayl_nomi=nomi, mime=mime, baytlar=baytlar)
     await kutish.delete()
-    await _tasdiq_yoki_saqla(update, uid)
+    await _necha_talaba_sorash(update, uid)
+
+
+# ============================================================ necha talaba (bo'lish)
+async def _necha_talaba_sorash(update: Update, uid: int):
+    """Chek o'qilgach: bir necha talabaga bo'linadimi?"""
+    p = holat_p(uid)
+    d = p["chek"]
+    holat_saqla(uid, stage="necha_talaba")
+    qatorlar = [
+        [InlineKeyboardButton("👤 1 talaba", callback_data="nt:1")],
+        [InlineKeyboardButton("👥 2 talaba", callback_data="nt:2"),
+         InlineKeyboardButton("👥 3 talaba", callback_data="nt:3")],
+        [InlineKeyboardButton("✏️ Boshqa son", callback_data="nt:m")],
+        [InlineKeyboardButton("❌ Bekor", callback_data="cancel")],
+    ]
+    await javob(update,
+                f"🧾 Chek o'qildi: <b>{pul(d.get('summa'))}</b> so'm\n\n"
+                f"Bu to'lov <b>necha talaba</b> uchun?", kb(qatorlar))
+
+
+async def _bolish_boshla(update: Update, uid: int, soni: int):
+    """Bo'lish rejimini boshlaydi."""
+    p = holat_p(uid)
+    d = p["chek"]
+    if soni <= 1:
+        # Oddiy — bitta talaba
+        holat_saqla(uid, bolish=False)
+        if p.get("talaba_id"):
+            # Talaba oldindan aniqlangan (forward qilingan) → tasdiqqa
+            holat_saqla(uid, stage="tasdiq")
+            await _tasdiq_yoki_saqla(update, uid)
+        else:
+            # Talaba yo'q — forward/ism so'raymiz
+            holat_saqla(uid, stage="ism_kutish")
+            await javob(update,
+                        "👤 Talabani forward qiling yoki ismini yozing:\n"
+                        "<i>masalan: Kamila Obidova, 83-Fonetika</i>")
+        return
+
+    holat_saqla(uid, bolish=True, talaba_soni=soni, qismlar=[],
+                qoldiq=d.get("summa") or 0, joriy_talaba=None,
+                stage="bolish_talaba")
+    await _bolish_keyingi(update, uid)
+
+
+async def _bolish_keyingi(update: Update, uid: int):
+    """Bo'lishda keyingi talabani so'rash yoki tugatish."""
+    p = holat_p(uid)
+    qismlar = p.get("qismlar", [])
+    soni = p.get("talaba_soni", 1)
+    n = len(qismlar)
+
+    if n >= soni:
+        # Hammasi kiritildi → saqlash
+        await _bolish_saqla(update, uid)
+        return
+
+    qoldiq = p.get("qoldiq", 0)
+    holat_saqla(uid, stage="bolish_talaba", joriy_talaba=None)
+    kiritilgan = "\n".join(
+        f"  {i+1}. {e(q['ism'])} — {pul(q['summa'])}" for i, q in enumerate(qismlar))
+    matn = (f"👥 <b>{n+1}-talaba</b> ({soni} tadan)\n")
+    if kiritilgan:
+        matn += f"\nKiritilgan:\n{kiritilgan}\n"
+    matn += (f"\n💰 Qolgan: <b>{pul(qoldiq)}</b> so'm\n\n"
+             f"Talabani forward qiling yoki ismini yozing:")
+    await javob(update, matn)
+
+
+async def _bolish_talaba_tanlandi(update: Update, uid: int, talaba: dict):
+    """Bo'lishda talaba aniqlandi → summa so'raladi (guruh narxlari bilan)."""
+    p = holat_saqla(uid, joriy_talaba={"id": talaba["id"], "ism": talaba["ism"]})
+    qoldiq = p.get("qoldiq", 0)
+    n = len(p.get("qismlar", []))
+    soni = p.get("talaba_soni", 1)
+
+    # Faol guruhlar narxi
+    try:
+        guruhlar = await N.talaba_faol_guruhlari(talaba["id"])
+    except Exception:
+        guruhlar = []
+
+    qatorlar = []
+    korilgan_narx = set()
+    for g in guruhlar:
+        narx = g.get("narx")
+        if narx and narx not in korilgan_narx:
+            korilgan_narx.add(narx)
+            yorliq = f"{pul(narx)} · {g['guruh_nomi']}"[:60]
+            qatorlar.append([InlineKeyboardButton(yorliq,
+                                                 callback_data=f"bs:{int(narx)}")])
+    # Oxirgi talaba bo'lsa — "qolganini berish" varianti
+    if n == soni - 1 and qoldiq > 0:
+        qatorlar.append([InlineKeyboardButton(f"💯 Qolganini: {pul(qoldiq)}",
+                                              callback_data=f"bs:{int(qoldiq)}")])
+    qatorlar.append([InlineKeyboardButton("✏️ Qo'lda yozish", callback_data="bs:m")])
+    qatorlar.append([InlineKeyboardButton("❌ Bekor", callback_data="cancel")])
+
+    holat_saqla(uid, stage="bolish_summa")
+    await javob(update,
+                f"👤 <b>{e(talaba['ism'])}</b>\n"
+                f"💰 Qolgan: {pul(qoldiq)}\n\n"
+                f"Bu talaba uchun qancha?", kb(qatorlar))
+
+
+async def _bolish_summa_qabul(update: Update, uid: int, summa: int):
+    """Bo'lishda bitta talaba summasi kiritildi."""
+    p = holat_p(uid)
+    jt = p.get("joriy_talaba")
+    if not jt:
+        await javob(update, "⌛️ Ma'lumot yo'qolgan. /bekor bosing.")
+        return
+    qismlar = p.get("qismlar", [])
+    qismlar.append({"id": jt["id"], "ism": jt["ism"], "summa": summa})
+    qoldiq = (p.get("qoldiq", 0)) - summa
+    holat_saqla(uid, qismlar=qismlar, qoldiq=qoldiq)
+    await _bolish_keyingi(update, uid)
+
+
+async def _bolish_saqla(update: Update, uid: int):
+    """Bo'lingan to'lovlarni har talabaga alohida yozadi."""
+    p = holat_p(uid)
+    d = p["chek"]
+    qismlar = p.get("qismlar", [])
+    qoldiq = p.get("qoldiq", 0)
+
+    await javob(update, "💾 Notion'ga yozilmoqda…")
+
+    # Chekni bir marta yuklaymiz, hamma yozuvga o'sha faylni beramiz
+    upload_id = None
+    if p.get("baytlar"):
+        upload_id = await N.fayl_yukla(p.get("fayl_nomi") or "chek",
+                                       p.get("mime") or "image/jpeg", p["baytlar"])
+
+    # Karta (hammasiga bir xil)
+    karta = await N.karta_top(d.get("qabul_karta"))
+    if not karta and d.get("qabul_fio"):
+        karta, _ = await N.karta_top_ism(d["qabul_fio"])
+
+    sana_iso = d.get("sana") or datetime.now(TZ).date().isoformat()
+    if d.get("sana") and d.get("vaqt"):
+        sana_iso = f"{d['sana'][:10]}T{d['vaqt']}:00+05:00"
+    sana_qisqa = sana_iso[:10].replace("-", ".")
+
+    natijalar = []
+    jami = len(qismlar)
+    for idx, q in enumerate(qismlar, 1):
+        izohlar = [f"Bo'lingan to'lov ({idx}/{jami}) — umumiy {pul(d.get('summa'))}"]
+        if d.get("tranzaksiya_id"):
+            izohlar.append(f"Trx: {d['tranzaksiya_id']}")
+        if d.get("qabul_fio"):
+            izohlar.append(f"Qabul: {d['qabul_fio']}")
+        if d.get("izoh"):
+            izohlar.append(d["izoh"])
+
+        nomi = f"{q['ism']} — {pul(q['summa'])} — {sana_qisqa}"
+        try:
+            sahifa = await N.tolov_yozuv({
+                "nomi": nomi,
+                "talaba_id": q["id"],
+                "summa": q["summa"],
+                "sana": sana_iso,
+                "fio": d.get("tolovchi_fio"),
+                "karta_id": karta["id"] if karta else None,
+                "karta_mos": bool(karta),
+                "tizim": d.get("tolov_tizimi"),
+                # Tranzaksiya ID ni faqat BIRINCHI yozuvga beramiz —
+                # aks holda dublikat nazorati ikkinchisini bloklaydi
+                "trx": d.get("tranzaksiya_id") if idx == 1 else None,
+                "chek_url": p.get("chek_url"),
+                "tekshir_url": d.get("tekshirish_havolasi"),
+                "shubhali": True,        # bo'lingan to'lov doim tekshiruvga
+                "fayl_id": p.get("fayl_unique") if idx == 1 else None,
+                "hash": p.get("hash") if idx == 1 else None,
+                "izoh": " | ".join(izohlar),
+                "yub_karta": d.get("yuboruvchi_karta"),
+                "file_upload_id": upload_id,
+                "fayl_nomi": p.get("fayl_nomi"),
+            })
+            natijalar.append(f"✅ {e(q['ism'])} — {pul(q['summa'])}")
+        except Exception as ex:
+            log.exception("Bo'lingan yozuv xatosi")
+            natijalar.append(f"❌ {e(q['ism'])} — xato: {e(ex)}")
+
+    # Telegram ID yozish (forward bo'lgan talabaga)
+    if p.get("forward_tgid") and qismlar:
+        try:
+            await N.tgid_yoz(qismlar[0]["id"], p["forward_tgid"])
+        except Exception:
+            pass
+
+    PENDING.pop(uid, None)
+
+    xabar = (f"✅ <b>Bo'lingan to'lov saqlandi</b>\n"
+             f"Umumiy: {pul(d.get('summa'))} so'm\n\n"
+             + "\n".join(natijalar))
+    if qoldiq > 0:
+        xabar += f"\n\n⚠️ <b>Taqsimlanmagan qoldiq: {pul(qoldiq)}</b>"
+    elif qoldiq < 0:
+        xabar += f"\n\n⚠️ <b>Ortiqcha taqsimlandi: {pul(-qoldiq)}</b>"
+    xabar += "\n\n🏷 Hammasi Shubhali deb belgilandi (tekshirib qo'ying)."
+    await javob(update, xabar)
 
 
 # ============================================================ tasdiq / saqlash
@@ -610,6 +823,38 @@ async def _saqla(update: Update, uid: int):
 
 
 # ============================================================ matn handler
+async def _bolish_ism_qabul(update: Update, uid: int, matn: str):
+    """Bo'lish rejimida talaba ismini qidirish."""
+    r = ajrat_ism_guruh(matn)
+    if not r["ism"]:
+        await javob(update, "❌ Ism topilmadi. Qaytadan yozing.")
+        return
+    kutish = await update.effective_message.reply_text("🔍 Talaba izlanmoqda…")
+    try:
+        aniq, taxminlar = await N.talaba_izla(r["ism"], r["guruh"])
+    except Exception as ex:
+        await kutish.edit_text(f"❌ Notion xatosi: <code>{e(ex)}</code>",
+                              parse_mode=ParseMode.HTML)
+        return
+    await kutish.delete()
+    if not taxminlar:
+        await javob(update, f"❌ <b>{e(r['ism'])}</b> topilmadi. Qaytadan yozing.")
+        return
+    holat_saqla(uid, stage="bolish_talaba_tanlash", talaba_taxmin=taxminlar)
+    if aniq:
+        await _bolish_talaba_tanlandi(update, uid,
+                                     {"id": aniq["id"], "ism": aniq["ism"]})
+        return
+    qatorlar = []
+    for i, t in enumerate(taxminlar):
+        yorliq = t["ism"]
+        if t.get("guruhlar"):
+            yorliq += f" · {t['guruhlar'][0]}"
+        qatorlar.append([InlineKeyboardButton(yorliq[:60], callback_data=f"bt:{i}")])
+    qatorlar.append([InlineKeyboardButton("❌ Bekor", callback_data="cancel")])
+    await javob(update, "Qaysi talaba?", kb(qatorlar))
+
+
 def _sana_ajrat(matn: str):
     import re
     matn = matn.strip()
@@ -639,6 +884,29 @@ async def matn_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     matn = (update.effective_message.text or "").strip()
     p = holat_p(uid)
     stage = (p or {}).get("stage")
+
+    # Bo'lish rejimi — talaba ismi kutilmoqda
+    if stage in ("bolish_talaba", "bolish_talaba_tanlash"):
+        await _bolish_ism_qabul(update, uid, matn)
+        return
+
+    # Bo'lish rejimi — summa qo'lda (yoki summa tanlash ekranida raqam yozildi)
+    if stage in ("bolish_summa_qolda", "bolish_summa"):
+        raqam = "".join(ch for ch in matn if ch.isdigit())
+        if not raqam:
+            await javob(update, "❌ Faqat raqam yozing, masalan <code>270000</code>.")
+            return
+        await _bolish_summa_qabul(update, uid, int(raqam))
+        return
+
+    # Necha talaba — qo'lda son
+    if stage == "necha_talaba_son":
+        raqam = "".join(ch for ch in matn if ch.isdigit())
+        if not raqam or int(raqam) < 1 or int(raqam) > 10:
+            await javob(update, "❌ 1 dan 10 gacha son yozing.")
+            return
+        await _bolish_boshla(update, uid, int(raqam))
+        return
 
     # Ism kutilmoqda (forward ID yo'q edi yoki yangi ID)
     if stage in ("ism_kutish", "talaba_tanlash"):
@@ -737,6 +1005,37 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             holat_saqla(uid, karta=royxat[i], karta_mos=True,
                         karta_ism_bilan=True, karta_hal=True, stage="tasdiq")
         await _tasdiq_yoki_saqla(update, uid)
+        return
+
+    # Necha talaba (bo'lish boshlash)
+    if data.startswith("nt:"):
+        tanlov = data[3:]
+        if tanlov == "m":
+            holat_saqla(uid, stage="necha_talaba_son")
+            await javob(update, "✏️ Necha talaba? Son yozing (masalan 2):")
+            return
+        await _bolish_boshla(update, uid, int(tanlov))
+        return
+
+    # Bo'lishda talaba tanlash
+    if data.startswith("bt:"):
+        i = int(data[3:])
+        taxmin = p.get("talaba_taxmin") or []
+        if i >= len(taxmin):
+            await javob(update, "❌ Ro'yxat eskirgan.")
+            return
+        t = taxmin[i]
+        await _bolish_talaba_tanlandi(update, uid, {"id": t["id"], "ism": t["ism"]})
+        return
+
+    # Bo'lishda summa
+    if data.startswith("bs:"):
+        tanlov = data[3:]
+        if tanlov == "m":
+            holat_saqla(uid, stage="bolish_summa_qolda")
+            await javob(update, "✏️ Summani yozing (masalan 270000):")
+            return
+        await _bolish_summa_qabul(update, uid, int(tanlov))
         return
 
     # Sana

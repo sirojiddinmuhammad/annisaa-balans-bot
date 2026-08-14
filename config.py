@@ -58,6 +58,8 @@ P_YOZ_HOLAT = "Holat"               # O'qiyabdi / Ta'tilda / Tugatdi
 
 # Guruhlar
 P_GURUH_NOMI = "Guruh nomi"         # title
+P_GURUH_NARX = "Oylik to'lov"        # number
+P_GURUH_HOLAT = "Guruh holati"       # Faol / Boshlanmagan / Tugagan
 
 # Kartalar
 P_KARTA_NOMI = "Karta nomi"         # title

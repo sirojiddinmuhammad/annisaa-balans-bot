@@ -84,10 +84,17 @@ async def _keshlangan(kalit, olish):
 
 
 async def guruhlar_map():
-    """{guruh_id: guruh_nomi}"""
+    """{guruh_id: {nomi, narx, holat}}"""
     async def olish():
         sahifalar = await _query_all(C.GURUHLAR_DB)
-        return {s["id"]: _title(s, C.P_GURUH_NOMI) for s in sahifalar}
+        out = {}
+        for s in sahifalar:
+            out[s["id"]] = {
+                "nomi": _title(s, C.P_GURUH_NOMI),
+                "narx": _number(s, C.P_GURUH_NARX),
+                "holat": _select(s, C.P_GURUH_HOLAT),
+            }
+        return out
     return await _keshlangan("guruhlar", olish)
 
 
@@ -127,18 +134,35 @@ async def talaba_tgid(tg_id):
 
 
 async def _talaba_guruhlari(talaba_id):
-    """Talabaning yozilishlaridagi guruh nomlari va holati.
-    Qaytadi: [{guruh_nomi, holat}]"""
+    """Talabaning yozilishlaridagi guruhlar.
+    Qaytadi: [{guruh_id, guruh_nomi, narx, holat, yoz_holat}]
+      yoz_holat — Yozilishdagi Holat (O'qiyabdi/Ta'tilda/Tugatdi)
+      holat — Guruhning o'z holati (Faol/...)"""
     filter_ = {"property": C.P_YOZ_TALABA, "relation": {"contains": talaba_id}}
     yozuvlar = await _query_all(C.YOZILISHLAR_DB, filter_)
     gmap = await guruhlar_map()
     out = []
     for y in yozuvlar:
         gids = _relation_ids(y, C.P_YOZ_GURUH)
-        holat = _select(y, C.P_YOZ_HOLAT)
+        yoz_holat = _select(y, C.P_YOZ_HOLAT)
         for gid in gids:
-            out.append({"guruh_nomi": gmap.get(gid, ""), "holat": holat})
+            g = gmap.get(gid) or {}
+            out.append({
+                "guruh_id": gid,
+                "guruh_nomi": g.get("nomi", ""),
+                "narx": g.get("narx"),
+                "holat": g.get("holat", ""),
+                "yoz_holat": yoz_holat,
+            })
     return out
+
+
+async def talaba_faol_guruhlari(talaba_id):
+    """Talabaning FAOL yozilishlaridagi guruhlar (narx bilan).
+    Faol = Yozilish holati 'O'qiyabdi'. Bo'lmasa — hammasi qaytadi."""
+    hammasi = await _talaba_guruhlari(talaba_id)
+    faol = [g for g in hammasi if "o'qiy" in (g.get("yoz_holat") or "").lower()]
+    return faol or hammasi
 
 
 async def talaba_izla(ism, guruh_matn="", n=6):
@@ -193,7 +217,7 @@ async def talaba_izla(ism, guruh_matn="", n=6):
                 if gb >= 0.6 or _qism_mos(guruh_matn, g["guruh_nomi"]):
                     t["mos_guruh"] = True
                     juft[0] += 0.5           # guruh mos kelsa ballni ko'taramiz
-                    if "o'qiy" in (g["holat"] or "").lower():
+                    if "o'qiy" in (g["yoz_holat"] or "").lower():
                         juft[0] += 0.1       # faol yozilish ustun
                     break
     else:
