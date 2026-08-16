@@ -8,6 +8,7 @@ Eslatma / Qarzdor modul
 """
 import calendar
 import datetime as _dt
+import hashlib
 import html
 import re
 
@@ -16,7 +17,7 @@ HAFTA_QISQA = None  # (hozircha ishlatilmaydi, kelajakda kerak bo'lishi mumkin)
 # {kod: {"yozilish_id":..., "talaba_id":..., "talaba_ism":..., "guruh_nomi":...}}
 KOD_MAP: dict = {}
 
-_KOD_RE = re.compile(r"#T[0-9a-f]{5}")
+_KOD_RE = re.compile(r"#T[0-9a-f]{6}")
 
 
 def _e(s):
@@ -38,9 +39,11 @@ def _sana_fmt(iso, fmt="%d/%m"):
 
 # ---------------------------------------------------------------- kod
 def kod_yasash(yozilish_id: str, talaba_id: str, talaba_ism: str, guruh_nomi: str) -> str:
-    """Yozilish ID dan qisqa kod yasaydi va KOD_MAP ga yozadi."""
-    tozalangan = yozilish_id.replace("-", "")
-    kod = "#T" + tozalangan[:5]
+    """Yozilish ID dan qisqa kod yasaydi (hash orqali — ID prefikslari
+    bu workspace'da bir-biriga o'xshab qolgani uchun oddiy kesish ishlamaydi)
+    va KOD_MAP ga yozadi."""
+    hash_ = hashlib.sha1(yozilish_id.encode()).hexdigest()
+    kod = "#T" + hash_[:6]
     KOD_MAP[kod] = {
         "yozilish_id": yozilish_id,
         "talaba_id": talaba_id,
