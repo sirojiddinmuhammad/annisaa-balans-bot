@@ -567,7 +567,7 @@ async def talaba_faol_yozilishlar_toliq(talaba_id, darslar_kerak=False):
         item = {
             "yozilish_id": y["id"],
             "guruh_nomi": g.get("nomi", ""),
-            "tolov": _formula_number(y, C.P_YOZ_FAOL_TOLOV),
+            "tolov": g.get("narx"),
             "oylikmi": bool(g.get("oylikmi")),
             "boshlagan_sana": _date(y, C.P_YOZ_BOSHLAGAN),
         }
