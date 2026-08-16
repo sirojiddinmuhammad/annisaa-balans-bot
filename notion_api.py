@@ -93,6 +93,9 @@ async def guruhlar_map():
                 "nomi": _title(s, C.P_GURUH_NOMI),
                 "narx": _number(s, C.P_GURUH_NARX),
                 "holat": _select(s, C.P_GURUH_HOLAT),
+                "chastota": _number(s, C.P_GURUH_CHASTOTA),
+                "dars_kunlari": _multi_select(s, C.P_GURUH_DARS_KUNLARI),
+                "oylikmi": _checkbox(s, C.P_GURUH_DAVOMAT_KERAK_EMAS),
             }
         return out
     return await _keshlangan("guruhlar", olish)
@@ -472,3 +475,154 @@ async def tolov_yozuv(d):
         "parent": {"database_id": C.TOLOVLAR_DB},
         "properties": props,
     })
+
+
+# ============================================================ ESLATMA / QARZDOR
+# ---------------------------------------------------------------- formula/rollup o'qish
+def _formula_number(sahifa, prop):
+    f = (sahifa.get("properties", {}).get(prop) or {}).get("formula") or {}
+    return f.get("number")
+
+
+def _formula_checkbox(sahifa, prop):
+    f = (sahifa.get("properties", {}).get(prop) or {}).get("formula") or {}
+    return bool(f.get("boolean"))
+
+
+def _formula_text(sahifa, prop):
+    f = (sahifa.get("properties", {}).get(prop) or {}).get("formula") or {}
+    return f.get("string") or ""
+
+
+def _rollup_number(sahifa, prop):
+    r = (sahifa.get("properties", {}).get(prop) or {}).get("rollup") or {}
+    return r.get("number")
+
+
+def _date(sahifa, prop):
+    d = (sahifa.get("properties", {}).get(prop) or {}).get("date") or {}
+    return d.get("start")
+
+
+def _multi_select(sahifa, prop):
+    p = sahifa.get("properties", {}).get(prop) or {}
+    return [x.get("name", "") for x in (p.get("multi_select") or [])]
+
+
+def _checkbox(sahifa, prop):
+    p = sahifa.get("properties", {}).get(prop) or {}
+    return bool(p.get("checkbox"))
+
+
+# ---------------------------------------------------------------- ro'yxatlar
+async def talabalar_eslatma():
+    """Balansi musbat, lekin 1 aylanmaga (yaqin darsga) yetadigan yoki kam
+    qolgan talabalar. 05:00 avtomat eslatma uchun."""
+    filter_ = {"property": C.P_TALABA_ESLATMA_KERAK,
+               "formula": {"checkbox": {"equals": True}}}
+    sahifalar = await _query_all(C.TALABALAR_DB, filter_)
+    return [{"id": s["id"], "ism": _title(s, C.P_TALABA_ISM)} for s in sahifalar]
+
+
+async def talabalar_qarzdor():
+    """Balansi manfiy (yoki nolga tushgan) talabalar.
+    Yangi qarzdorlar birinchi, eskilari oxirida (Qarzga tushgan sana bo'yicha).
+    Birinchi marta ko'ringan talabaga bugungi sana yozib qo'yiladi."""
+    import datetime as _dt
+    filter_ = {"property": C.P_TALABA_BALANS_HOLATI,
+               "formula": {"string": {"contains": "Qarzdor"}}}
+    sahifalar = await _query_all(C.TALABALAR_DB, filter_)
+    bugun = _dt.date.today().isoformat()
+    natija = []
+    for s in sahifalar:
+        sana = _date(s, C.P_TALABA_QARZ_SANA)
+        if not sana:
+            sana = bugun
+            try:
+                await _req("PATCH", f"/pages/{s['id']}", {
+                    "properties": {C.P_TALABA_QARZ_SANA: {"date": {"start": bugun}}}
+                })
+            except Exception as ex:
+                log.warning("Qarz sanasi yozilmadi (%s): %s", s["id"], ex)
+        natija.append({"id": s["id"], "ism": _title(s, C.P_TALABA_ISM), "qarz_sana": sana})
+    natija.sort(key=lambda x: x["qarz_sana"], reverse=True)
+    return natija
+
+
+async def talaba_faol_yozilishlar_toliq(talaba_id, darslar_kerak=False):
+    """Talabaning FAOL (O'qiyabdi) yozilishlari — guruh nomi, to'lov summasi,
+    oylikmi belgisi bilan. darslar_kerak=True bo'lsa — darsbay guruhlar uchun
+    darslar ro'yxatini ham qo'shadi (Davomatdan)."""
+    filter_ = {"property": C.P_YOZ_TALABA, "relation": {"contains": talaba_id}}
+    yozuvlar = await _query_all(C.YOZILISHLAR_DB, filter_)
+    gmap = await guruhlar_map()
+    out = []
+    for y in yozuvlar:
+        holat = _select(y, C.P_YOZ_HOLAT)
+        if "o'qiy" not in (holat or "").lower():
+            continue
+        gids = _relation_ids(y, C.P_YOZ_GURUH)
+        gid = gids[0] if gids else None
+        g = gmap.get(gid) or {}
+        item = {
+            "yozilish_id": y["id"],
+            "guruh_nomi": g.get("nomi", ""),
+            "tolov": _formula_number(y, C.P_YOZ_FAOL_TOLOV),
+            "oylikmi": bool(g.get("oylikmi")),
+            "boshlagan_sana": _date(y, C.P_YOZ_BOSHLAGAN),
+        }
+        if darslar_kerak and not item["oylikmi"]:
+            item["darslar"] = await yozilish_darslari(
+                y["id"], g.get("chastota"), g.get("dars_kunlari"))
+        out.append(item)
+    return out
+
+
+async def yozilish_darslari(yozilish_id, chastota, dars_kunlari):
+    """Yozilish uchun oxirgi (chastota-1) ta dars (sana+holat) va navbatdagi
+    bo'lajak darsni qaytaradi: [{"sana": "YYYY-MM-DD", "holat": "keldi"/"kelmadi"/"bolajak"}]"""
+    chastota = int(chastota) if chastota else 8
+    kerak = max(chastota - 1, 1)
+    filter_ = {"property": "Yozilish", "relation": {"contains": yozilish_id}}
+    body = {"filter": filter_,
+            "sorts": [{"property": C.P_DAVOMAT_SANA, "direction": "descending"}],
+            "page_size": kerak}
+    data = await _req("POST", f"/databases/{C.DAVOMAT_DB}/query", body)
+    yozuvlar = list(reversed(data.get("results") or []))
+
+    darslar = []
+    for y in yozuvlar:
+        sana = _date(y, C.P_DAVOMAT_SANA)
+        if not sana:
+            continue
+        holat_raw = (_select(y, C.P_DAVOMAT_HOLAT) or "").lower()
+        if "kelmadi" in holat_raw:
+            holat = "kelmadi"
+        else:
+            holat = "keldi"
+        darslar.append({"sana": sana, "holat": holat})
+
+    oxirgi_sana = darslar[-1]["sana"] if darslar else None
+    keyingi = _keyingi_dars_sanasi(oxirgi_sana, dars_kunlari)
+    if keyingi:
+        darslar.append({"sana": keyingi, "holat": "bolajak"})
+    return darslar
+
+
+def _keyingi_dars_sanasi(oxirgi_sana, dars_kunlari):
+    """Oxirgi darsdan keyingi, guruh dars kunlariga mos eng yaqin sanani topadi."""
+    import datetime as _dt
+    if not dars_kunlari:
+        return None
+    boshlanish = _dt.date.fromisoformat(oxirgi_sana) if oxirgi_sana else _dt.date.today()
+    if "Harkuni" in dars_kunlari:
+        return (boshlanish + _dt.timedelta(days=1)).isoformat()
+    nomer = {nomi: i for i, nomi in enumerate(C.HAFTA_KUNLARI)}
+    kerakli = {nomer[k] for k in dars_kunlari if k in nomer}
+    if not kerakli:
+        return None
+    for qoshish in range(1, 15):
+        kun = boshlanish + _dt.timedelta(days=qoshish)
+        if kun.weekday() in kerakli:
+            return kun.isoformat()
+    return None

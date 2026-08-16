@@ -24,6 +24,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 import config as C
 import notion_api as N
 import receipt_ai as AI
+import eslatma as ES
 from eslatma_parser import ajrat_ism_guruh
 
 logging.basicConfig(
@@ -122,7 +123,10 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "3️⃣ Chekni yuboring (rasm yoki PDF)\n"
                 "4️⃣ To'lov bazaga yoziladi\n\n"
                 "<code>/bekor</code> — bekor qilish\n"
-                "<code>/kesh</code> — ro'yxatlarni yangilash\n\n"
+                "<code>/kesh</code> — ro'yxatlarni yangilash\n"
+                "<code>/qarzdorlar</code> — qarzdorlar ro'yxati\n\n"
+                "🔔 Har kuni 05:00 da puli tugab qolayotganlarga "
+                "avtomat eslatma keladi.\n\n"
                 f"Sizning ID: <code>{uid}</code>")
 
 
@@ -140,6 +144,138 @@ async def kesh_yangila(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     g = await N.guruhlar_map()
     k = await N.kartalar()
     await javob(update, f"♻️ Yangilandi: {len(g)} guruh, {len(k)} karta.")
+
+
+# ============================================================ QARZDORLAR
+QARZDOR_SAHIFA = 20
+QARZDOR_ROYXAT: dict = {}   # {uid: [{"talaba_ism","guruh_nomi","tolov","yozilish_id",
+                             #         "talaba_id","kun"}]}
+
+
+async def _qarzdorlar_yigish():
+    """Barcha qarzdorlarning har bir faol guruhi bo'yicha alohida qatorini yig'adi."""
+    import datetime as _dt
+    talabalar = await N.talabalar_qarzdor()
+    bugun = _dt.date.today()
+    natija = []
+    for t in talabalar:
+        try:
+            qarz_sana = _dt.date.fromisoformat(t["qarz_sana"][:10])
+            kun = (bugun - qarz_sana).days
+        except Exception:
+            kun = 0
+        try:
+            yozilishlar = await N.talaba_faol_yozilishlar_toliq(t["id"])
+        except Exception:
+            log.exception("Qarzdor yozilishlari olinmadi: %s", t["ism"])
+            continue
+        for y in yozilishlar:
+            natija.append({
+                "talaba_ism": t["ism"], "talaba_id": t["id"],
+                "guruh_nomi": y["guruh_nomi"], "tolov": y["tolov"],
+                "yozilish_id": y["yozilish_id"], "kun": kun,
+            })
+    return natija
+
+
+def _qarzdor_tugma_matn(item):
+    kun_matn = "bugun" if item["kun"] <= 0 else f"{item['kun']} kun"
+    return f"{item['talaba_ism']} · {item['guruh_nomi']} · {pul(item['tolov'])} ({kun_matn})"[:64]
+
+
+async def _qarzdorlar_korsat(update: Update, uid: int, offset: int):
+    royxat = QARZDOR_ROYXAT.get(uid) or []
+    jami = len(royxat)
+    sahifa = royxat[offset:offset + QARZDOR_SAHIFA]
+    if not sahifa:
+        await javob(update, "✅ Qarzdorlar yo'q.")
+        return
+    qatorlar = []
+    for i, item in enumerate(sahifa, start=offset):
+        qatorlar.append([InlineKeyboardButton(
+            _qarzdor_tugma_matn(item), callback_data=f"qz:{i}")])
+    qatorlar.append([InlineKeyboardButton(
+        "📤 Hammasini yuborish", callback_data=f"qzall:{offset}")])
+    if offset + QARZDOR_SAHIFA < jami:
+        qolgan = jami - (offset + QARZDOR_SAHIFA)
+        qatorlar.append([InlineKeyboardButton(
+            f"➡️ Keyingi ({qolgan} ta qoldi)", callback_data=f"qznext:{offset + QARZDOR_SAHIFA}")])
+
+    boshi = f"1-{min(offset + QARZDOR_SAHIFA, jami)}" if offset else f"1-{min(QARZDOR_SAHIFA, jami)}"
+    await javob(update, f"📋 <b>Qarzdorlar — {jami} ta</b> ({boshi})", kb(qatorlar))
+
+
+async def qarzdorlar_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not admin_mi(update):
+        return
+    uid = update.effective_user.id
+    kutish = await update.effective_message.reply_text("🔍 Qarzdorlar izlanmoqda…")
+    try:
+        royxat = await _qarzdorlar_yigish()
+    except Exception as ex:
+        log.exception("Qarzdorlar ro'yxati olinmadi")
+        await kutish.edit_text(f"❌ Notion xatosi: <code>{e(ex)}</code>",
+                              parse_mode=ParseMode.HTML)
+        return
+    QARZDOR_ROYXAT[uid] = royxat
+    await kutish.delete()
+    await _qarzdorlar_korsat(update, uid, 0)
+
+
+async def _qarzdor_xabar_yubor(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, item: dict):
+    kod = ES.kod_yasash(item["yozilish_id"], item["talaba_id"],
+                        item["talaba_ism"], item["guruh_nomi"])
+    matn = ES.qarzdor_matn(item["talaba_ism"], item["guruh_nomi"], item["tolov"], kod)
+    await ctx.bot.send_message(chat_id, matn, parse_mode=ParseMode.HTML)
+
+
+# ============================================================ ESLATMA (05:00 avtomat)
+async def _eslatma_xabar_yubor(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int,
+                              talaba_ism: str, talaba_id: str, y: dict):
+    kod = ES.kod_yasash(y["yozilish_id"], talaba_id, talaba_ism, y["guruh_nomi"])
+    if y["oylikmi"]:
+        matn = ES.eslatma_matn_oylik(talaba_ism, y["guruh_nomi"], y["tolov"],
+                                     y.get("boshlagan_sana"), kod)
+    else:
+        matn = ES.eslatma_matn_darsbay(talaba_ism, y["guruh_nomi"], y["tolov"],
+                                       y.get("darslar") or [], kod)
+    await ctx.bot.send_message(chat_id, matn, parse_mode=ParseMode.HTML)
+
+
+async def eslatma_avtomat(ctx: ContextTypes.DEFAULT_TYPE):
+    """Har kuni 05:00 (Toshkent) da ishga tushadi."""
+    if not C.ADMIN_IDS:
+        log.warning("ADMIN_IDS bo'sh — eslatma avtomat hech kimga yubormadi.")
+        return
+    try:
+        talabalar = await N.talabalar_eslatma()
+    except Exception:
+        log.exception("Eslatma ro'yxati olinmadi (avtomat)")
+        return
+
+    xabarlar = []
+    for t in talabalar:
+        try:
+            yozilishlar = await N.talaba_faol_yozilishlar_toliq(t["id"], darslar_kerak=True)
+        except Exception:
+            log.exception("Eslatma yozilishlari olinmadi: %s", t["ism"])
+            continue
+        for y in yozilishlar:
+            xabarlar.append((t["ism"], t["id"], y))
+
+    if not xabarlar:
+        log.info("Eslatma avtomat: bugun hech kim yo'q.")
+        return
+
+    for admin_id in C.ADMIN_IDS:
+        try:
+            await ctx.bot.send_message(
+                admin_id, f"🔔 Bugun <b>{len(xabarlar)} ta</b> eslatma bor",
+                parse_mode=ParseMode.HTML)
+            for ism, talaba_id, y in xabarlar:
+                await _eslatma_xabar_yubor(ctx, admin_id, ism, talaba_id, y)
+        except Exception:
+            log.exception("Eslatma avtomat yuborilmadi: admin=%s", admin_id)
 
 
 # ============================================================ talaba topish
@@ -320,6 +456,19 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not fayl:
         await javob(update, "❌ Faqat rasm yoki PDF qabul qilinadi.")
         return
+
+    # Chek REPLY qilingan bo'lsa (eslatma/qarzdor xabariga) — yashirin kod
+    # orqali talabani aniq topamiz. Bu forward'dan ham ustun, chunki bot
+    # o'zi yozgan xabar bo'lgani uchun 100% aniq.
+    reply = update.effective_message.reply_to_message
+    if reply is not None and not (holat_p(uid) or {}).get("talaba_id"):
+        reply_matn = reply.text or reply.caption or ""
+        malumot = ES.kod_dan_malumot(reply_matn)
+        if malumot:
+            holat_saqla(uid, talaba_id=malumot["talaba_id"],
+                        talaba_nomi=malumot["talaba_ism"])
+            log.info("Reply orqali talaba topildi: %s (kod orqali)",
+                     malumot["talaba_ism"])
 
     # Chek forward qilingan bo'lsa — undan ham Telegram ID olishga harakat
     if update.effective_message.forward_origin or \
@@ -993,6 +1142,32 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await javob(update, "❌ Bekor qilindi.")
         return
 
+    # Qarzdorlar — bitta talabaga yuborish
+    if data.startswith("qz:"):
+        i = int(data[3:])
+        royxat = QARZDOR_ROYXAT.get(uid) or []
+        if i >= len(royxat):
+            await javob(update, "❌ Ro'yxat eskirgan. /qarzdorlar qaytadan bosing.")
+            return
+        await _qarzdor_xabar_yubor(ctx, update.effective_chat.id, royxat[i])
+        return
+
+    # Qarzdorlar — shu sahifadagilarning hammasini yuborish
+    if data.startswith("qzall:"):
+        offset = int(data[6:])
+        royxat = QARZDOR_ROYXAT.get(uid) or []
+        sahifa = royxat[offset:offset + QARZDOR_SAHIFA]
+        for item in sahifa:
+            await _qarzdor_xabar_yubor(ctx, update.effective_chat.id, item)
+        await q.answer(f"✅ {len(sahifa)} ta xabar yuborildi", show_alert=False)
+        return
+
+    # Qarzdorlar — keyingi sahifa
+    if data.startswith("qznext:"):
+        offset = int(data[7:])
+        await _qarzdorlar_korsat(update, uid, offset)
+        return
+
     if not p:
         await javob(update, "⌛️ Muddat tugadi. Qaytadan boshlang.")
         return
@@ -1106,6 +1281,17 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bekor", bekor))
     app.add_handler(CommandHandler("kesh", kesh_yangila))
+    app.add_handler(CommandHandler("qarzdorlar", qarzdorlar_cmd))
+
+    if app.job_queue is not None:
+        import datetime as _dt
+        app.job_queue.run_daily(
+            eslatma_avtomat, time=_dt.time(hour=5, minute=0, tzinfo=TZ),
+            name="eslatma_avtomat")
+    else:
+        log.warning(
+            "JobQueue mavjud emas — requirements.txt da "
+            "'python-telegram-bot[job-queue]' borligini tekshiring.")
 
     # Forward qilingan xabar (matn/rasm/hujjat) — talabani topish
     app.add_handler(MessageHandler(

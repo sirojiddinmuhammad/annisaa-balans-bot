@@ -66,6 +66,36 @@ P_KARTA_NOMI = "Karta nomi"         # title
 P_KARTA_L4 = "Oxirgi 4 raqam"
 P_KARTA_STATUS = "Status"           # Faol / Biriktirilmagan
 
+# ---------- Eslatma / qarzdor funksiyasi uchun ----------
+# Davomat bazasi (Notion sahifa URL'idagi ID, tire bilan)
+DAVOMAT_DB = "e52488ca-0ae2-4b29-9132-039aefa80e4b"
+
+# Talabalar (formula/rollup, faqat o'qish uchun)
+P_TALABA_BALANS = "Balans"                    # formula (number)
+P_TALABA_BALANS_HOLATI = "Balans holati"      # formula (matn, masalan "🔴 Qarzdor")
+P_TALABA_ESLATMA_KERAK = "Eslatma kerak"      # formula (checkbox)
+P_TALABA_1AYLANMA = "1 aylanma"               # rollup (number)
+P_TALABA_QARZ_SANA = "Qarzga tushgan sana"    # date — bot to'ldiradi
+
+# Yozilishlar (qo'shimcha)
+P_YOZ_NOMI = "Nomi"                 # title
+P_YOZ_FAOL_TOLOV = "Faol to'lov"     # formula (number) — 1 aylanma narxi
+P_YOZ_DAVOMAT = "Davomat"           # relation → Davomat
+P_YOZ_BOSHLAGAN = "Boshlagan sana"  # date
+
+# Guruhlar (qo'shimcha)
+P_GURUH_CHASTOTA = "Chastota"                 # number
+P_GURUH_DARS_KUNLARI = "Dars kunlari"         # multi_select
+P_GURUH_DAVOMAT_KERAK_EMAS = "Davomat kerak emas"  # checkbox
+P_GURUH_OYLIK = "Oylik to'lov"                # number (allaqachon P_GURUH_NARX bilan bir xil)
+
+# Davomat
+P_DAVOMAT_SANA = "Sana"             # date
+P_DAVOMAT_HOLAT = "Holat"           # select
+
+HAFTA_KUNLARI = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba",
+                  "Juma", "Shanba", "Yakshanba"]
+
 # ---------- Sozlamalar ----------
 PENDING_TTL = 30 * 60        # kutish muddati (soniya)
 ESKI_CHEK_KUN = 30           # shundan eski chek → shubhali
