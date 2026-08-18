@@ -110,6 +110,26 @@ def _forward_id(update: Update):
     return None, None
 
 
+async def _kod_dan_talaba(matn: str):
+    """Matn ichidagi yashirin kod (#Txxxxxx) orqali talabani topadi.
+    Avval xotiradan (tez), topilmasa Notiondan qidiradi (bot qayta ishga
+    tushgan bo'lsa ham ishlaydi)."""
+    if not matn:
+        return None
+    malumot = ES.kod_dan_malumot(matn)
+    if not malumot:
+        m = ES.KOD_RE.search(matn)
+        if m:
+            try:
+                malumot = await N.yozilish_kod_orqali(m.group(0))
+            except Exception:
+                log.exception("Kod orqali Notiondan qidirishda xato")
+                malumot = None
+    if not malumot:
+        return None
+    return {"id": malumot["talaba_id"], "ism": malumot["talaba_ism"]}
+
+
 # ============================================================ /start
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not admin_mi(update):
@@ -317,6 +337,23 @@ async def _talaba_tanlandi(update: Update, uid: int, talaba: dict,
 async def _forward_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Forward qilingan xabar — Telegram ID orqali talaba topish."""
     uid = update.effective_user.id
+    m = update.effective_message
+
+    # Avval — yashirin kod orqali tekshiramiz (eslatma/qarzdor xabarini
+    # qayta forward qilgan bo'lsangiz, shu yerda tanib olamiz).
+    matn_kod = m.text or m.caption or ""
+    talaba_kod = await _kod_dan_talaba(matn_kod)
+    if talaba_kod:
+        p = holat_p(uid)
+        bolishda = p and p.get("bolish") and \
+            (p.get("stage") in ("bolish_talaba", "bolish_talaba_tanlash"))
+        log.info("Forward: talaba KOD orqali topildi — %s", talaba_kod["ism"])
+        if bolishda:
+            await _bolish_talaba_tanlandi(update, uid, talaba_kod)
+        else:
+            await _talaba_tanlandi(update, uid, talaba_kod)
+        return
+
     tg_id, ism = _forward_id(update)
     p = holat_p(uid)
     bolishda = p and p.get("bolish") and \
@@ -457,18 +494,17 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await javob(update, "❌ Faqat rasm yoki PDF qabul qilinadi.")
         return
 
-    # Chek REPLY qilingan bo'lsa (eslatma/qarzdor xabariga) — yashirin kod
-    # orqali talabani aniq topamiz. Bu forward'dan ham ustun, chunki bot
-    # o'zi yozgan xabar bo'lgani uchun 100% aniq.
-    reply = update.effective_message.reply_to_message
-    if reply is not None and not (holat_p(uid) or {}).get("talaba_id"):
-        reply_matn = reply.text or reply.caption or ""
-        malumot = ES.kod_dan_malumot(reply_matn)
-        if malumot:
-            holat_saqla(uid, talaba_id=malumot["talaba_id"],
-                        talaba_nomi=malumot["talaba_ism"])
-            log.info("Reply orqali talaba topildi: %s (kod orqali)",
-                     malumot["talaba_ism"])
+    # Chek REPLY qilingan bo'lsa (eslatma/qarzdor xabariga) yoki caption'ida
+    # kod bo'lsa — yashirin kod orqali talabani aniq topamiz. Bu forward'dan
+    # ham ustun, chunki bot o'zi yozgan xabar bo'lgani uchun 100% aniq.
+    if not (holat_p(uid) or {}).get("talaba_id"):
+        reply = update.effective_message.reply_to_message
+        reply_matn = (reply.text or reply.caption or "") if reply else ""
+        oz_matn = update.effective_message.caption or ""
+        talaba_kod = await _kod_dan_talaba(reply_matn) or await _kod_dan_talaba(oz_matn)
+        if talaba_kod:
+            holat_saqla(uid, talaba_id=talaba_kod["id"], talaba_nomi=talaba_kod["ism"])
+            log.info("Chek: talaba KOD orqali topildi — %s", talaba_kod["ism"])
 
     # Chek forward qilingan bo'lsa — undan ham Telegram ID olishga harakat
     if update.effective_message.forward_origin or \
@@ -1061,6 +1097,17 @@ async def matn_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     matn = (update.effective_message.text or "").strip()
     p = holat_p(uid)
     stage = (p or {}).get("stage")
+
+    # Yashirin kod orqali talaba topish (o'zi yozgan matnda yoki reply
+    # qilingan xabarda). Faqat talaba hali aniqlanmagan bosqichlarda.
+    if stage in ("ism_kutish", "chek_kutish", None) or not (p or {}).get("talaba_id"):
+        reply = update.effective_message.reply_to_message
+        reply_matn = (reply.text or reply.caption or "") if reply else ""
+        talaba_kod = await _kod_dan_talaba(matn) or await _kod_dan_talaba(reply_matn)
+        if talaba_kod:
+            log.info("Matn: talaba KOD orqali topildi — %s", talaba_kod["ism"])
+            await _talaba_tanlandi(update, uid, talaba_kod)
+            return
 
     # Bo'lish rejimi — talaba ismi kutilmoqda
     if stage in ("bolish_talaba", "bolish_talaba_tanlash"):

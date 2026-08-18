@@ -626,3 +626,39 @@ def _keyingi_dars_sanasi(oxirgi_sana, dars_kunlari):
         if kun.weekday() in kerakli:
             return kun.isoformat()
     return None
+
+
+# ---------------------------------------------------------------- yashirin kod (doimiy qidiruv)
+import hashlib as _hashlib
+import re as _re
+
+_KOD_RE = _re.compile(r"#T([0-9a-f]{6})$")
+
+
+async def yozilish_kod_orqali(kod: str):
+    """#Txxxxxx kod orqali Yozilishni Notiondan qidirib topadi.
+    Bu — botning xotirasi (KOD_MAP) yo'qolgan taqdirda ham ishlaydigan
+    zaxira yo'l: bot qayta ishga tushgan bo'lsa ham (Railway qayta deploy,
+    xatolik, va h.k.) kod ishlayveradi, chunki hech narsa xotirada saqlanmaydi —
+    har safar Notiondan qidiriladi."""
+    m = _KOD_RE.match(kod.strip())
+    if not m:
+        return None
+    maqsad = m.group(1)
+    yozuvlar = await _query_all(C.YOZILISHLAR_DB)
+    for y in yozuvlar:
+        if _hashlib.sha1(y["id"].encode()).hexdigest()[:6] == maqsad:
+            talaba_ids = _relation_ids(y, C.P_YOZ_TALABA)
+            gids = _relation_ids(y, C.P_YOZ_GURUH)
+            if not talaba_ids:
+                return None
+            talaba_id = talaba_ids[0]
+            talaba_sahifa = await _req("GET", f"/pages/{talaba_id}")
+            talaba_ism = _title(talaba_sahifa, C.P_TALABA_ISM)
+            gmap = await guruhlar_map()
+            guruh_nomi = gmap.get(gids[0], {}).get("nomi", "") if gids else ""
+            return {
+                "yozilish_id": y["id"], "talaba_id": talaba_id,
+                "talaba_ism": talaba_ism, "guruh_nomi": guruh_nomi,
+            }
+    return None

@@ -18,6 +18,7 @@ HAFTA_QISQA = None  # (hozircha ishlatilmaydi, kelajakda kerak bo'lishi mumkin)
 KOD_MAP: dict = {}
 
 _KOD_RE = re.compile(r"#T[0-9a-f]{6}")
+KOD_RE = _KOD_RE  # boshqa modullar (main.py) uchun ochiq nom
 
 
 def _e(s):
