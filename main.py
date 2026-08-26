@@ -14,9 +14,10 @@ Ish tartibi:
 import asyncio
 import html
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, Update)
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      KeyboardButton, ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
@@ -75,6 +76,13 @@ def kb(qatorlar):
     return InlineKeyboardMarkup(qatorlar)
 
 
+# Ekran pastida doim turadigan klaviatura
+TUGMA_QARZDOR = "📋 Qarzdorlar"
+ASOSIY_KB = ReplyKeyboardMarkup(
+    [[KeyboardButton(TUGMA_QARZDOR)]], resize_keyboard=True,
+    is_persistent=True, input_field_placeholder="Chek yuboring yoki tugmani bosing")
+
+
 async def javob(update: Update, matn, keyboard=None):
     if update.callback_query:
         await update.callback_query.edit_message_text(
@@ -84,6 +92,14 @@ async def javob(update: Update, matn, keyboard=None):
         await update.effective_message.reply_text(
             matn, parse_mode=ParseMode.HTML, reply_markup=keyboard,
             disable_web_page_preview=True)
+
+
+async def javob_yangi(update: Update, matn, keyboard=None):
+    """Har doim YANGI xabar yuboradi (mavjudini tahrirlamaydi).
+    Ro'yxat ochiq turishi kerak bo'lgan joylarda ishlatiladi."""
+    await update.effective_message.reply_text(
+        matn, parse_mode=ParseMode.HTML, reply_markup=keyboard,
+        disable_web_page_preview=True)
 
 
 def _forward_id(update: Update):
@@ -135,19 +151,20 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not admin_mi(update):
         return
     uid = update.effective_user.id
-    await javob(update,
-                "👋 <b>Chek boti</b> (yangi CRM)\n\n"
-                "1️⃣ Talaba xabarini menga <b>forward</b> qiling\n"
-                "   (yoki ism + guruh nomini matn qilib yuboring)\n"
-                "2️⃣ Talaba tasdiqlanadi\n"
-                "3️⃣ Chekni yuboring (rasm yoki PDF)\n"
-                "4️⃣ To'lov bazaga yoziladi\n\n"
-                "<code>/bekor</code> — bekor qilish\n"
-                "<code>/kesh</code> — ro'yxatlarni yangilash\n"
-                "<code>/qarzdorlar</code> — qarzdorlar ro'yxati\n\n"
-                "🔔 Har kuni 05:00 da puli tugab qolayotganlarga "
-                "avtomat eslatma keladi.\n\n"
-                f"Sizning ID: <code>{uid}</code>")
+    await update.effective_message.reply_text(
+        "👋 <b>Chek boti</b> (yangi CRM)\n\n"
+        "1️⃣ Chekni yuboring (rasm yoki PDF)\n"
+        "2️⃣ Bot talabani o'zi izlaydi — tanlaysiz\n"
+        "3️⃣ Necha talabaga bo'linishini belgilaysiz\n"
+        "4️⃣ To'lov bazaga yoziladi\n\n"
+        "📋 <b>Qarzdorlar</b> tugmasi — qarzdorlar ro'yxati, "
+        "raqamni bosib eslatma matnini olasiz.\n\n"
+        "<code>/bekor</code> — bekor qilish\n"
+        "<code>/kesh</code> — ro'yxatlarni yangilash\n\n"
+        "🔔 Har kuni 05:00 da puli tugab qolayotganlarga "
+        "avtomat eslatma keladi.\n\n"
+        f"Sizning ID: <code>{uid}</code>",
+        parse_mode=ParseMode.HTML, reply_markup=ASOSIY_KB)
 
 
 async def bekor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -167,86 +184,269 @@ async def kesh_yangila(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================ QARZDORLAR
-QARZDOR_SAHIFA = 20
-QARZDOR_ROYXAT: dict = {}   # {uid: [{"talaba_ism","guruh_nomi","tolov","yozilish_id",
-                             #         "talaba_id","kun"}]}
+# {uid: {"royxat": [...], "sarlavha": str, "offset": int}}
+QARZDOR_HOLAT: dict = {}
+
+
+def _kun_farqi(sana_iso):
+    """Berilgan sanadan bugungacha necha kun (None → None)."""
+    if not sana_iso:
+        return None
+    try:
+        return (datetime.now(TZ).date() -
+                date.fromisoformat(sana_iso[:10])).days
+    except Exception:
+        return None
+
+
+def _qarz_rang(kun):
+    if kun is None:
+        return "\u26aa"
+    for chegara, belgi in C.QARZDOR_RANG:
+        if kun <= chegara:
+            return belgi
+    return "\U0001f534"
+
+
+def _eslatma_matn(kun):
+    if kun is None:
+        return "eslatilmagan"
+    if kun == 0:
+        return "bugun eslatilgan"
+    if kun == 1:
+        return "kecha eslatilgan"
+    return f"{kun} kun oldin eslatilgan"
 
 
 async def _qarzdorlar_yigish():
-    """Barcha qarzdorlarning har bir faol guruhi bo'yicha alohida qatorini yig'adi."""
-    import datetime as _dt
+    """Barcha qarzdorlarni yig'adi — har talaba BIR marta, guruhlari ro'yxat bilan.
+    Yozilishlar bitta so'rovda olinadi (har talaba uchun alohida so'rov emas)."""
     talabalar = await N.talabalar_qarzdor()
-    bugun = _dt.date.today()
+    barcha_yoz = await N.yozilishlar_hammasi()
     natija = []
     for t in talabalar:
-        try:
-            qarz_sana = _dt.date.fromisoformat(t["qarz_sana"][:10])
-            kun = (bugun - qarz_sana).days
-        except Exception:
-            kun = 0
-        try:
-            yozilishlar = await N.talaba_faol_yozilishlar_toliq(t["id"])
-        except Exception:
-            log.exception("Qarzdor yozilishlari olinmadi: %s", t["ism"])
+        yozilishlar = barcha_yoz.get(t["id"]) or []
+        if not yozilishlar:
             continue
-        for y in yozilishlar:
-            natija.append({
-                "talaba_ism": t["ism"], "talaba_id": t["id"],
-                "guruh_nomi": y["guruh_nomi"], "tolov": y["tolov"],
-                "yozilish_id": y["yozilish_id"], "kun": kun,
-            })
+        natija.append({
+            "talaba_id": t["id"],
+            "talaba_ism": t["ism"],
+            "balans": t.get("balans"),
+            "qarz_kun": _kun_farqi(t.get("qarz_sana")),
+            "eslatma_kun": _kun_farqi(t.get("eslatma_sana")),
+            "yozilishlar": yozilishlar,
+        })
+    # Hech eslatilmaganlar birinchi, keyin eng uzoq eslatilmaganlar
+    natija.sort(key=lambda x: (x["eslatma_kun"] is not None,
+                               -(x["eslatma_kun"] or 0)))
     return natija
 
 
-def _qarzdor_tugma_matn(item):
-    kun_matn = "bugun" if item["kun"] <= 0 else f"{item['kun']} kun"
-    return f"{item['talaba_ism']} · {item['guruh_nomi']} · {pul(item['tolov'])} ({kun_matn})"[:64]
+def _qarzdor_qator(nom, item, guruh_filtr=None):
+    """Ro'yxatdagi bitta talaba qatorini matn qilib yasaydi."""
+    yoz = item["yozilishlar"]
+    if guruh_filtr:
+        guruh_matn = ""
+        # Filtrlangan ro'yxatda balans umumiy ekanini belgilab qo'yamiz
+        qoshimcha = f" (umumiy, {len(yoz)} guruh)" if len(yoz) > 1 else ""
+    else:
+        guruh_matn = ", ".join(y["guruh_nomi"] for y in yoz if y["guruh_nomi"])
+        qoshimcha = ""
+
+    qarz_kun = item["qarz_kun"]
+    rang = _qarz_rang(qarz_kun)
+    qarz_matn = ("yangi qarzdor" if qarz_kun is None
+                 else ("bugun qarzga tushdi" if qarz_kun == 0
+                       else f"{qarz_kun} kun qarzda"))
+
+    satr = f"<b>{nom}. {e(item['talaba_ism'])}</b>\n"
+    if guruh_matn:
+        satr += f"   {e(guruh_matn)} · {pul(item['balans'])} so'm{qoshimcha}\n"
+    else:
+        satr += f"   {pul(item['balans'])} so'm{qoshimcha}\n"
+    satr += f"   {rang} {qarz_matn} · {_eslatma_matn(item['eslatma_kun'])}"
+    return satr
 
 
-async def _qarzdorlar_korsat(update: Update, uid: int, offset: int):
-    royxat = QARZDOR_ROYXAT.get(uid) or []
+async def _qarzdorlar_korsat(update: Update, uid: int, offset: int = 0):
+    h = QARZDOR_HOLAT.get(uid) or {}
+    royxat = h.get("royxat") or []
+    sarlavha = h.get("sarlavha") or "Barcha qarzdorlar"
+    guruh_filtr = h.get("guruh_filtr")
     jami = len(royxat)
-    sahifa = royxat[offset:offset + QARZDOR_SAHIFA]
-    if not sahifa:
-        await javob(update, "✅ Qarzdorlar yo'q.")
+    if not jami:
+        await javob(update, "\u2705 Qarzdor topilmadi.")
         return
-    qatorlar = []
-    for i, item in enumerate(sahifa, start=offset):
-        qatorlar.append([InlineKeyboardButton(
-            _qarzdor_tugma_matn(item), callback_data=f"qz:{i}")])
-    qatorlar.append([InlineKeyboardButton(
-        "📤 Hammasini yuborish", callback_data=f"qzall:{offset}")])
-    if offset + QARZDOR_SAHIFA < jami:
-        qolgan = jami - (offset + QARZDOR_SAHIFA)
-        qatorlar.append([InlineKeyboardButton(
-            f"➡️ Keyingi ({qolgan} ta qoldi)", callback_data=f"qznext:{offset + QARZDOR_SAHIFA}")])
 
-    boshi = f"1-{min(offset + QARZDOR_SAHIFA, jami)}" if offset else f"1-{min(QARZDOR_SAHIFA, jami)}"
-    await javob(update, f"📋 <b>Qarzdorlar — {jami} ta</b> ({boshi})", kb(qatorlar))
+    h["offset"] = offset
+    QARZDOR_HOLAT[uid] = h
+    n = C.QARZDOR_SAHIFA
+    sahifa = royxat[offset:offset + n]
+
+    satrlar = [_qarzdor_qator(offset + i + 1, item, guruh_filtr)
+               for i, item in enumerate(sahifa)]
+    matn = (f"\U0001f4cb <b>{e(sarlavha)}</b> ({jami} ta) · "
+            f"{offset + 1}-{offset + len(sahifa)}\n\n" + "\n\n".join(satrlar))
+
+    # Raqamli tugmalar — 5 tadan ikki qator
+    qatorlar = []
+    raqamlar = [InlineKeyboardButton(str(offset + i + 1), callback_data=f"qz:{offset + i}")
+                for i in range(len(sahifa))]
+    for i in range(0, len(raqamlar), 5):
+        qatorlar.append(raqamlar[i:i + 5])
+
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton("\u2b05\ufe0f Oldingi",
+                                        callback_data=f"qzp:{max(offset - n, 0)}"))
+    if offset + n < jami:
+        nav.append(InlineKeyboardButton(f"\u27a1\ufe0f Keyingi {min(n, jami - offset - n)} ta",
+                                        callback_data=f"qzp:{offset + n}"))
+    if nav:
+        qatorlar.append(nav)
+    qatorlar.append([InlineKeyboardButton("\U0001f504 Filtrni o'zgartirish",
+                                          callback_data="qzf")])
+    await javob(update, matn, kb(qatorlar))
+
+
+async def qarzdorlar_filtr_sorash(update: Update, uid: int):
+    """Qarzdorlar tugmasi bosilganda — filtr tanlash."""
+    qatorlar = [
+        [InlineKeyboardButton("\U0001f4ca Hammasi", callback_data="qzall")],
+        [InlineKeyboardButton("\U0001f9d1\u200d\U0001f3eb Ustoz bo'yicha", callback_data="qzu")],
+        [InlineKeyboardButton("\U0001f6aa Guruh bo'yicha", callback_data="qzg")],
+    ]
+    await javob(update, "\U0001f4cb <b>Qarzdorlar</b>\n\nQanday ko'rsatay?", kb(qatorlar))
+
+
+async def _qarzdorlar_yukla(update: Update, uid: int):
+    """Ro'yxatni Notiondan oladi va keshlaydi."""
+    kutish = await update.effective_message.reply_text("\U0001f50d Qarzdorlar izlanmoqda\u2026")
+    try:
+        royxat = await _qarzdorlar_yigish()
+    except Exception as ex:
+        log.exception("Qarzdorlar ro'yxati olinmadi")
+        await kutish.edit_text(f"\u274c Notion xatosi: <code>{e(ex)}</code>",
+                               parse_mode=ParseMode.HTML)
+        return None
+    await kutish.delete()
+    QARZDOR_HOLAT[uid] = {"hammasi": royxat}
+    return royxat
 
 
 async def qarzdorlar_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not admin_mi(update):
         return
     uid = update.effective_user.id
-    kutish = await update.effective_message.reply_text("🔍 Qarzdorlar izlanmoqda…")
-    try:
-        royxat = await _qarzdorlar_yigish()
-    except Exception as ex:
-        log.exception("Qarzdorlar ro'yxati olinmadi")
-        await kutish.edit_text(f"❌ Notion xatosi: <code>{e(ex)}</code>",
-                              parse_mode=ParseMode.HTML)
+    await qarzdorlar_filtr_sorash(update, uid)
+
+
+async def _qarzdor_filtr_royxati(update: Update, uid: int, tur: str):
+    """Ustoz yoki guruh ro'yxatini chiqaradi (faqat qarzdori borlari)."""
+    h = QARZDOR_HOLAT.get(uid) or {}
+    hammasi = h.get("hammasi")
+    if hammasi is None:
+        hammasi = await _qarzdorlar_yukla(update, uid)
+        if hammasi is None:
+            return
+        h = QARZDOR_HOLAT[uid]
+
+    sanoq = {}
+    for item in hammasi:
+        for y in item["yozilishlar"]:
+            kalit = (y.get("ustoz") or "").strip() if tur == "ustoz" else \
+                    (y.get("guruh_nomi") or "").strip()
+            if not kalit:
+                continue
+            sanoq.setdefault(kalit, set()).add(item["talaba_id"])
+
+    if not sanoq:
+        await javob(update, "\u2705 Qarzdor topilmadi.")
         return
-    QARZDOR_ROYXAT[uid] = royxat
-    await kutish.delete()
+
+    tartib = sorted(sanoq.items(), key=lambda kv: -len(kv[1]))
+    h["filtr_kalitlar"] = [k for k, _ in tartib]
+    QARZDOR_HOLAT[uid] = h
+
+    qatorlar = [[InlineKeyboardButton(f"{k} ({len(v)})"[:64],
+                                      callback_data=f"qzs:{tur[0]}:{i}")]
+                for i, (k, v) in enumerate(tartib)]
+    qatorlar.append([InlineKeyboardButton("\u2b05\ufe0f Orqaga", callback_data="qzf")])
+    nom = "Ustoz" if tur == "ustoz" else "Guruh"
+    await javob(update, f"\U0001f4cb <b>{nom} tanlang</b>", kb(qatorlar))
+
+
+async def _qarzdor_filtrla(update: Update, uid: int, tur: str, idx: int):
+    """Tanlangan ustoz/guruh bo'yicha ro'yxatni tayyorlaydi."""
+    h = QARZDOR_HOLAT.get(uid) or {}
+    kalitlar = h.get("filtr_kalitlar") or []
+    if idx >= len(kalitlar):
+        await javob(update, "\u23f3 Ro'yxat eskirgan. Qaytadan boshlang.")
+        return
+    kalit = kalitlar[idx]
+    hammasi = h.get("hammasi") or []
+
+    filtrlangan = []
+    for item in hammasi:
+        mos = [y for y in item["yozilishlar"]
+               if ((y.get("ustoz") or "").strip() == kalit if tur == "ustoz"
+                   else (y.get("guruh_nomi") or "").strip() == kalit)]
+        if mos:
+            yangi = dict(item)
+            yangi["mos_yozilishlar"] = mos
+            filtrlangan.append(yangi)
+
+    h.update({"royxat": filtrlangan, "sarlavha": f"{kalit} qarzdorlari",
+              "guruh_filtr": True})
+    QARZDOR_HOLAT[uid] = h
     await _qarzdorlar_korsat(update, uid, 0)
 
 
-async def _qarzdor_xabar_yubor(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, item: dict):
-    kod = ES.kod_yasash(item["yozilish_id"], item["talaba_id"],
-                        item["talaba_ism"], item["guruh_nomi"])
-    matn = ES.qarzdor_matn(item["talaba_ism"], item["guruh_nomi"], item["tolov"], kod)
-    await ctx.bot.send_message(chat_id, matn, parse_mode=ParseMode.HTML)
+async def _qarzdor_hammasi(update: Update, uid: int):
+    h = QARZDOR_HOLAT.get(uid) or {}
+    hammasi = h.get("hammasi")
+    if hammasi is None:
+        hammasi = await _qarzdorlar_yukla(update, uid)
+        if hammasi is None:
+            return
+        h = QARZDOR_HOLAT[uid]
+    h.update({"royxat": hammasi, "sarlavha": "Barcha qarzdorlar",
+              "guruh_filtr": None})
+    QARZDOR_HOLAT[uid] = h
+    await _qarzdorlar_korsat(update, uid, 0)
+
+
+async def _qarzdor_tanlandi(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                            uid: int, idx: int):
+    """Raqam bosilgan — qarzdor matn(lar)ini chiqaradi va sanani yozadi.
+    Talaba ham tanlanadi: shundan keyin chek yuborilsa, o'shanga yoziladi."""
+    h = QARZDOR_HOLAT.get(uid) or {}
+    royxat = h.get("royxat") or []
+    if idx >= len(royxat):
+        await javob(update, "\u23f3 Ro'yxat eskirgan. Qaytadan boshlang.")
+        return
+    item = royxat[idx]
+    yozilishlar = item.get("mos_yozilishlar") or item["yozilishlar"]
+
+    for y in yozilishlar:
+        kod = ES.kod_yasash(y["yozilish_id"], item["talaba_id"],
+                            item["talaba_ism"], y["guruh_nomi"])
+        matn = ES.qarzdor_matn(item["talaba_ism"], y["guruh_nomi"],
+                               y["tolov"], kod)
+        await ctx.bot.send_message(update.effective_chat.id, matn,
+                                   parse_mode=ParseMode.HTML)
+
+    # Oxirgi eslatma sanasini yozamiz
+    await N.eslatma_sana_yoz(item["talaba_id"])
+    # Xotiradagi ro'yxatni ham yangilaymiz (qayta yuklamasdan)
+    item["eslatma_kun"] = 0
+
+    # Talabani tanlangan qilib qo'yamiz — chek shu talabaga yoziladi
+    holat_saqla(uid, talaba_id=item["talaba_id"],
+                talaba_nomi=item["talaba_ism"], stage="chek_kutish")
+    await javob_yangi(update,
+                      f"\u2705 <b>{e(item['talaba_ism'])}</b> tanlandi.\n"
+                      f"\U0001f4ce Chek kelsa shu talabaga yoziladi.")
 
 
 # ============================================================ ESLATMA (05:00 avtomat)
@@ -322,10 +522,14 @@ async def _talaba_tanlandi(update: Update, uid: int, talaba: dict,
     if yozilgan_id:
         ekstra = f"\n📝 Telegram ID saqlandi: <code>{yozilgan_id}</code>"
 
-    # Chek allaqachon kelgan bo'lsa (chek + forward birga) → tasdiqqa
+    # Chek allaqachon kelgan bo'lsa → "necha talaba" so'raymiz
+    # (bir marta; so'ralgandan keyin to'g'ridan-to'g'ri tasdiqqa)
     if p.get("chek"):
-        holat_saqla(uid, stage="tasdiq")
-        await _tasdiq_yoki_saqla(update, uid)
+        if not p.get("necha_sorandi"):
+            await _necha_talaba_sorash(update, uid)
+        else:
+            holat_saqla(uid, stage="tasdiq")
+            await _tasdiq_yoki_saqla(update, uid)
         return
 
     holat_saqla(uid, stage="chek_kutish")
@@ -506,19 +710,15 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             holat_saqla(uid, talaba_id=talaba_kod["id"], talaba_nomi=talaba_kod["ism"])
             log.info("Chek: talaba KOD orqali topildi — %s", talaba_kod["ism"])
 
-    # Chek forward qilingan bo'lsa — undan ham Telegram ID olishga harakat
+    # Chek forward qilingan bo'lsa — Telegram ID va profil ismini saqlaymiz
+    # (keyin avtomat izlashda ishlatiladi)
     if update.effective_message.forward_origin or \
        getattr(update.effective_message, "forward_from", None):
-        tg_id, _ = _forward_id(update)
-        if tg_id and not (holat_p(uid) or {}).get("talaba_id"):
-            # Chek forward'idan talabani topishga urinamiz
-            try:
-                talaba = await N.talaba_tgid(tg_id)
-                if talaba:
-                    holat_saqla(uid, talaba_id=talaba["id"],
-                                talaba_nomi=talaba["ism"], forward_tgid=tg_id)
-            except Exception:
-                pass
+        tg_id, f_ism = _forward_id(update)
+        if tg_id:
+            holat_saqla(uid, forward_tgid=tg_id)
+        if f_ism:
+            holat_saqla(uid, forward_ism=f_ism)
 
     p = holat_p(uid)
     # Chek talabasiz ham qabul qilinadi — "necha talaba" keyin so'raladi.
@@ -569,7 +769,77 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     holat_saqla(uid, chek=d, chek_url=chek_url, hash=hash_,
                 fayl_unique=fayl_unique, fayl_nomi=nomi, mime=mime, baytlar=baytlar)
     await kutish.delete()
-    await _necha_talaba_sorash(update, uid)
+    await _talaba_avto_izla(update, uid)
+
+
+# ============================================================ avtomat talaba izlash
+async def _talaba_avto_izla(update: Update, uid: int):
+    """Chek o'qilgach — talabani AVVAL o'zi izlaydi, keyin 'necha talaba' so'raydi.
+    Tartib: kod (allaqachon topilgan) → Telegram ID → profil ismi → chek FIO si."""
+    p = holat_p(uid)
+
+    # Talaba allaqachon aniq (kod orqali, qarzdorlar ro'yxatidan yoki forward)
+    if p.get("talaba_id"):
+        await _necha_talaba_sorash(update, uid)
+        return
+
+    d = p.get("chek") or {}
+    kutish = await update.effective_message.reply_text("🔍 Talaba izlanmoqda…")
+
+    nomzodlar = []
+    korilgan = set()
+
+    def qosh(t):
+        if t and t.get("id") and t["id"] not in korilgan:
+            korilgan.add(t["id"])
+            nomzodlar.append({"id": t["id"], "ism": t["ism"],
+                              "guruhlar": t.get("guruhlar") or []})
+
+    # 1) Telegram ID — eng ishonchli
+    if p.get("forward_tgid"):
+        try:
+            qosh(await N.talaba_tgid(p["forward_tgid"]))
+        except Exception:
+            log.exception("Telegram ID bo'yicha izlashda xato")
+
+    # 2) Forward qiluvchining profil ismi
+    # 3) Chekdagi to'lovchi FIO si
+    for manba in (p.get("forward_ism"), d.get("tolovchi_fio")):
+        if not manba or len(nomzodlar) >= C.NOMZOD_MAX:
+            continue
+        try:
+            _, taxminlar = await N.talaba_izla(manba)
+        except Exception:
+            log.exception("Ism bo'yicha izlashda xato: %s", manba)
+            continue
+        for t in taxminlar:
+            if len(nomzodlar) >= C.NOMZOD_MAX:
+                break
+            qosh(t)
+
+    await kutish.delete()
+
+    if not nomzodlar:
+        holat_saqla(uid, stage="ism_kutish")
+        await javob(update,
+                    f"🧾 Chek o'qildi: <b>{pul(d.get('summa'))}</b> so'm\n\n"
+                    f"❓ Talaba topilmadi.\n"
+                    f"👤 Talabani forward qiling yoki ismini yozing:\n"
+                    f"<i>masalan: Kamila Obidova, 83-Fonetika</i>")
+        return
+
+    holat_saqla(uid, stage="talaba_tanlash", talaba_taxmin=nomzodlar)
+    qatorlar = []
+    for i, t in enumerate(nomzodlar):
+        yorliq = t["ism"]
+        if t.get("guruhlar"):
+            yorliq += f" · {t['guruhlar'][0]}"
+        qatorlar.append([InlineKeyboardButton(yorliq[:60], callback_data=f"t:{i}")])
+    qatorlar.append([InlineKeyboardButton("🔍 Boshqa ism yozish", callback_data="tm")])
+    qatorlar.append([InlineKeyboardButton("❌ Bekor", callback_data="cancel")])
+    await javob(update,
+                f"🧾 Chek o'qildi: <b>{pul(d.get('summa'))}</b> so'm\n\n"
+                f"👤 Talabani tanlang:", kb(qatorlar))
 
 
 # ============================================================ necha talaba (bo'lish)
@@ -577,7 +847,7 @@ async def _necha_talaba_sorash(update: Update, uid: int):
     """Chek o'qilgach: bir necha talabaga bo'linadimi?"""
     p = holat_p(uid)
     d = p["chek"]
-    holat_saqla(uid, stage="necha_talaba")
+    holat_saqla(uid, stage="necha_talaba", necha_sorandi=True)
     qatorlar = [
         [InlineKeyboardButton("👤 1 talaba", callback_data="nt:1")],
         [InlineKeyboardButton("👥 2 talaba", callback_data="nt:2"),
@@ -612,6 +882,14 @@ async def _bolish_boshla(update: Update, uid: int, soni: int):
     holat_saqla(uid, bolish=True, talaba_soni=soni, qismlar=[],
                 qoldiq=d.get("summa") or 0, joriy_talaba=None,
                 stage="bolish_talaba")
+
+    # 1-talaba allaqachon aniqlangan bo'lsa (avtomat izlashda tanlangan) —
+    # uni qayta so'ramaymiz, to'g'ridan-to'g'ri summasini so'raymiz.
+    if p.get("talaba_id"):
+        await _bolish_talaba_tanlandi(
+            update, uid, {"id": p["talaba_id"], "ism": p["talaba_nomi"]})
+        return
+
     await _bolish_keyingi(update, uid)
 
 
@@ -715,6 +993,7 @@ async def _bolish_saqla(update: Update, uid: int):
     sana_qisqa = sana_iso[:10].replace("-", ".")
 
     natijalar = []
+    sahifa_idlar = []          # [(sahifa_id, ism)] — tuzatish tugmalari uchun
     jami = len(qismlar)
     for idx, q in enumerate(qismlar, 1):
         izohlar = [f"Bo'lingan to'lov ({idx}/{jami}) — umumiy {pul(d.get('summa'))}"]
@@ -750,6 +1029,7 @@ async def _bolish_saqla(update: Update, uid: int):
                 "fayl_nomi": p.get("fayl_nomi"),
             })
             natijalar.append(f"✅ {e(q['ism'])} — {pul(q['summa'])}")
+            sahifa_idlar.append(((sahifa.get("id") or "").replace("-", ""), q["ism"]))
         except Exception as ex:
             log.exception("Bo'lingan yozuv xatosi")
             natijalar.append(f"❌ {e(q['ism'])} — xato: {e(ex)}")
@@ -771,7 +1051,19 @@ async def _bolish_saqla(update: Update, uid: int):
     elif qoldiq < 0:
         xabar += f"\n\n⚠️ <b>Ortiqcha taqsimlandi: {pul(-qoldiq)}</b>"
     xabar += "\n\n🏷 Hammasi Shubhali deb belgilandi (tekshirib qo'ying)."
-    await javob(update, xabar)
+
+    # Har qismga alohida "tuzatish" tugmasi. Qismlar bir-biriga bog'liq
+    # bo'lgani uchun (yig'indi chek summasiga teng bo'lishi kerak) — guruhni
+    # eslab qolamiz, keyin tuzatishda yig'indi to'g'riligini tekshiramiz.
+    qatorlar = []
+    barcha_id = [sid for sid, _ in sahifa_idlar if sid]
+    for sid, ism in sahifa_idlar:
+        if not sid:
+            continue
+        BOLISH_GURUH[sid] = {"jami": d.get("summa"), "sheriklar": barcha_id}
+        qatorlar.append([InlineKeyboardButton(f"✏️ {ism}"[:60],
+                                              callback_data=f"fx:{sid}")])
+    await javob(update, xabar, kb(qatorlar) if qatorlar else None)
 
 
 # ============================================================ tasdiq / saqlash
@@ -1032,6 +1324,79 @@ async def _saqla(update: Update, uid: int):
     if p.get("shubhali"):
         xabar += "🏷 Shubhali deb belgilandi\n"
     xabar += f"\n<a href='{sahifa.get('url')}'>Notion'da ochish</a>"
+    sid = (sahifa.get("id") or "").replace("-", "")
+    tuzat = kb([[InlineKeyboardButton("✏️ Summani tuzatish",
+                                      callback_data=f"fx:{sid}")]]) if sid else None
+    await javob(update, xabar, tuzat)
+
+
+# ============================================================ SUMMANI TUZATISH
+# Bo'lingan to'lovda qismlar bir-biriga bog'liq — yig'indi chek summasiga
+# teng bo'lishi kerak. Bot qayta ishga tushsa bu yo'qoladi, lekin u holda
+# ham tuzatish ishlayveradi (faqat yig'indi ogohlantirishi bo'lmaydi).
+BOLISH_GURUH: dict = {}    # {sahifa_id: {"jami": int, "sheriklar": [sahifa_id]}}
+
+
+async def _summa_tuzatish_sorash(update: Update, uid: int, sahifa_id: str):
+    """Tuzatish tugmasi bosilgan — yangi summani so'raymiz."""
+    try:
+        eski = await N.tolov_oqi(sahifa_id)
+    except Exception as ex:
+        log.exception("To'lov o'qilmadi: %s", sahifa_id)
+        await javob_yangi(update, f"❌ Yozuv topilmadi: <code>{e(ex)}</code>")
+        return
+    holat_saqla(uid, stage="summa_tuzatish", fix_sahifa=sahifa_id,
+                fix_ism=eski.get("nomi"))
+    await javob_yangi(update,
+                      f"✏️ <b>Summani tuzatish</b>\n"
+                      f"{e(eski.get('nomi') or '')}\n\n"
+                      f"Hozirgi: <b>{pul(eski.get('summa'))}</b> so'm\n\n"
+                      f"Yangi summani yozing (masalan <code>270000</code>) "
+                      f"yoki /bekor.")
+
+
+async def _summa_tuzatish_qabul(update: Update, uid: int, matn: str):
+    """Yangi summa kiritildi — Notionda yangilaymiz."""
+    p = holat_p(uid) or {}
+    sahifa_id = p.get("fix_sahifa")
+    if not sahifa_id:
+        await javob(update, "⌛️ Ma'lumot yo'qolgan. Tugmani qaytadan bosing.")
+        return
+
+    raqam = "".join(ch for ch in matn if ch.isdigit())
+    if not raqam:
+        await javob(update, "❌ Summa tushunarsiz. Faqat raqam yozing "
+                            "(masalan <code>270000</code>).")
+        return
+    yangi = int(raqam)
+
+    try:
+        natija = await N.tolov_summa_yangila(sahifa_id, yangi)
+    except Exception as ex:
+        log.exception("Summa yangilanmadi")
+        await javob(update, f"❌ Yangilanmadi: <code>{e(ex)}</code>")
+        return
+
+    PENDING.pop(uid, None)
+    xabar = (f"✅ <b>Summa tuzatildi</b>\n\n"
+             f"{pul(natija['eski_summa'])} → <b>{pul(yangi)}</b> so'm")
+
+    # Bo'lingan to'lov bo'lsa — qismlar yig'indisini tekshiramiz
+    guruh = BOLISH_GURUH.get(sahifa_id)
+    if guruh and guruh.get("jami"):
+        yigindi = 0
+        toliq = True
+        for sid in guruh["sheriklar"]:
+            try:
+                yigindi += (await N.tolov_oqi(sid)).get("summa") or 0
+            except Exception:
+                toliq = False
+        if toliq and yigindi != guruh["jami"]:
+            farq = guruh["jami"] - yigindi
+            xabar += (f"\n\n⚠️ Qismlar yig'indisi: <b>{pul(yigindi)}</b>, "
+                      f"chekda: <b>{pul(guruh['jami'])}</b>\n"
+                      f"Farq: {pul(abs(farq))} so'm "
+                      f"{'yetmayapti' if farq > 0 else 'ortiqcha'}")
     await javob(update, xabar)
 
 
@@ -1097,6 +1462,16 @@ async def matn_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     matn = (update.effective_message.text or "").strip()
     p = holat_p(uid)
     stage = (p or {}).get("stage")
+
+    # Doimiy klaviaturadagi tugma (oddiy matn bo'lib keladi)
+    if matn == TUGMA_QARZDOR:
+        await qarzdorlar_filtr_sorash(update, uid)
+        return
+
+    # Summani tuzatish — yangi summa kutilmoqda
+    if stage == "summa_tuzatish":
+        await _summa_tuzatish_qabul(update, uid, matn)
+        return
 
     # Yashirin kod orqali talaba topish (o'zi yozgan matnda yoki reply
     # qilingan xabarda). Faqat talaba hali aniqlanmagan bosqichlarda.
@@ -1189,30 +1564,40 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await javob(update, "❌ Bekor qilindi.")
         return
 
-    # Qarzdorlar — bitta talabaga yuborish
-    if data.startswith("qz:"):
-        i = int(data[3:])
-        royxat = QARZDOR_ROYXAT.get(uid) or []
-        if i >= len(royxat):
-            await javob(update, "❌ Ro'yxat eskirgan. /qarzdorlar qaytadan bosing.")
-            return
-        await _qarzdor_xabar_yubor(ctx, update.effective_chat.id, royxat[i])
+    # ---------------- Qarzdorlar ----------------
+    if data == "qzf":                       # filtr menyusi
+        await qarzdorlar_filtr_sorash(update, uid)
         return
 
-    # Qarzdorlar — shu sahifadagilarning hammasini yuborish
-    if data.startswith("qzall:"):
-        offset = int(data[6:])
-        royxat = QARZDOR_ROYXAT.get(uid) or []
-        sahifa = royxat[offset:offset + QARZDOR_SAHIFA]
-        for item in sahifa:
-            await _qarzdor_xabar_yubor(ctx, update.effective_chat.id, item)
-        await q.answer(f"✅ {len(sahifa)} ta xabar yuborildi", show_alert=False)
+    if data == "qzall":                     # hammasi
+        await _qarzdor_hammasi(update, uid)
         return
 
-    # Qarzdorlar — keyingi sahifa
-    if data.startswith("qznext:"):
-        offset = int(data[7:])
-        await _qarzdorlar_korsat(update, uid, offset)
+    if data == "qzu":                       # ustoz bo'yicha
+        await _qarzdor_filtr_royxati(update, uid, "ustoz")
+        return
+
+    if data == "qzg":                       # guruh bo'yicha
+        await _qarzdor_filtr_royxati(update, uid, "guruh")
+        return
+
+    if data.startswith("qzs:"):             # ustoz/guruh tanlandi
+        _, tur_h, idx = data.split(":", 2)
+        await _qarzdor_filtrla(update, uid,
+                               "ustoz" if tur_h == "u" else "guruh", int(idx))
+        return
+
+    if data.startswith("qzp:"):             # sahifalash
+        await _qarzdorlar_korsat(update, uid, int(data[4:]))
+        return
+
+    if data.startswith("qz:"):              # raqam bosildi → matn + sana
+        await _qarzdor_tanlandi(update, ctx, uid, int(data[3:]))
+        return
+
+    # ---------------- Summani tuzatish ----------------
+    if data.startswith("fx:"):
+        await _summa_tuzatish_sorash(update, uid, data[3:])
         return
 
     if not p:

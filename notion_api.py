@@ -96,6 +96,7 @@ async def guruhlar_map():
                 "chastota": _number(s, C.P_GURUH_CHASTOTA),
                 "dars_kunlari": _multi_select(s, C.P_GURUH_DARS_KUNLARI),
                 "oylikmi": _checkbox(s, C.P_GURUH_DAVOMAT_KERAK_EMAS),
+                "ustoz": _formula_text(s, C.P_GURUH_USTOZ_ISM),
             }
         return out
     return await _keshlangan("guruhlar", olish)
@@ -525,28 +526,67 @@ async def talabalar_eslatma():
 
 
 async def talabalar_qarzdor():
-    """Balansi manfiy (yoki nolga tushgan) talabalar.
-    Yangi qarzdorlar birinchi, eskilari oxirida (Qarzga tushgan sana bo'yicha).
-    Birinchi marta ko'ringan talabaga bugungi sana yozib qo'yiladi."""
-    import datetime as _dt
+    """Balansi manfiy talabalar. Qaytadi: {id, ism, qarz_sana, eslatma_sana}.
+    DIQQAT: 'Qarzga tushgan sana' ni Notion Automation to'ldiradi — bot
+    unga tegmaydi, faqat o'qiydi."""
     filter_ = {"property": C.P_TALABA_BALANS_HOLATI,
                "formula": {"string": {"contains": "Qarzdor"}}}
     sahifalar = await _query_all(C.TALABALAR_DB, filter_)
-    bugun = _dt.date.today().isoformat()
-    natija = []
-    for s in sahifalar:
-        sana = _date(s, C.P_TALABA_QARZ_SANA)
-        if not sana:
-            sana = bugun
-            try:
-                await _req("PATCH", f"/pages/{s['id']}", {
-                    "properties": {C.P_TALABA_QARZ_SANA: {"date": {"start": bugun}}}
-                })
-            except Exception as ex:
-                log.warning("Qarz sanasi yozilmadi (%s): %s", s["id"], ex)
-        natija.append({"id": s["id"], "ism": _title(s, C.P_TALABA_ISM), "qarz_sana": sana})
-    natija.sort(key=lambda x: x["qarz_sana"], reverse=True)
-    return natija
+    return [{
+        "id": s["id"],
+        "ism": _title(s, C.P_TALABA_ISM),
+        "balans": _formula_number(s, C.P_TALABA_BALANS),
+        "qarz_sana": _date(s, C.P_TALABA_QARZ_SANA),
+        "eslatma_sana": _date(s, C.P_TALABA_ESLATMA_SANA),
+    } for s in sahifalar]
+
+
+async def eslatma_sana_yoz(talaba_id, sana_iso=None):
+    """Talabaga 'Oxirgi eslatma sanasi' ni yozadi (default — bugun)."""
+    import datetime as _dt
+    sana_iso = sana_iso or _dt.date.today().isoformat()
+    try:
+        await _req("PATCH", f"/pages/{talaba_id}", {
+            "properties": {C.P_TALABA_ESLATMA_SANA: {"date": {"start": sana_iso}}}
+        })
+        return True
+    except Exception as ex:
+        log.warning("Eslatma sanasi yozilmadi (%s): %s", talaba_id, ex)
+        return False
+
+
+async def yozilishlar_hammasi():
+    """BARCHA yozilishlarni bitta so'rovda oladi va talaba bo'yicha guruhlaydi.
+    Qaytadi: {talaba_id: [{yozilish_id, guruh_nomi, guruh_id, ustoz,
+                           tolov, oylikmi, boshlagan_sana}]}
+    Faqat FAOL (O'qiyabdi) yozilishlar. Bu — har talaba uchun alohida so'rov
+    yubormaslik uchun (qarzdorlar ro'yxatini tez ochish)."""
+    yozuvlar = await _query_all(C.YOZILISHLAR_DB)
+    gmap = await guruhlar_map()
+    out = {}
+    for y in yozuvlar:
+        holat = _select(y, C.P_YOZ_HOLAT)
+        if "o'qiy" not in (holat or "").lower():
+            continue
+        tids = _relation_ids(y, C.P_YOZ_TALABA)
+        if not tids:
+            continue
+        gids = _relation_ids(y, C.P_YOZ_GURUH)
+        g = gmap.get(gids[0]) if gids else None
+        g = g or {}
+        item = {
+            "yozilish_id": y["id"],
+            "guruh_id": gids[0] if gids else None,
+            "guruh_nomi": g.get("nomi", ""),
+            "ustoz": g.get("ustoz", ""),
+            "tolov": g.get("narx"),
+            "oylikmi": bool(g.get("oylikmi")),
+            "chastota": g.get("chastota"),
+            "dars_kunlari": g.get("dars_kunlari"),
+            "boshlagan_sana": _date(y, C.P_YOZ_BOSHLAGAN),
+        }
+        out.setdefault(tids[0], []).append(item)
+    return out
 
 
 async def talaba_faol_yozilishlar_toliq(talaba_id, darslar_kerak=False):
@@ -626,6 +666,33 @@ def _keyingi_dars_sanasi(oxirgi_sana, dars_kunlari):
         if kun.weekday() in kerakli:
             return kun.isoformat()
     return None
+
+
+# ---------------------------------------------------------------- summani tuzatish
+async def tolov_oqi(sahifa_id):
+    """Bitta to'lov yozuvini o'qiydi (summani tuzatishdan oldin/keyin)."""
+    s = await _req("GET", f"/pages/{sahifa_id}")
+    return {"id": s["id"], "nomi": _title(s, C.P_NOMI),
+            "summa": _number(s, C.P_SUMMA), "url": s.get("url")}
+
+
+async def tolov_summa_yangila(sahifa_id, yangi_summa):
+    """To'lov yozuvidagi Summa ni yangilaydi. Sarlavhada ham summa turgani
+    uchun (masalan 'Ism — 270 000 — 18.08.26') uni ham birga yangilaydi,
+    aks holda ikkisi bir-biriga zid bo'lib qoladi."""
+    eski = await tolov_oqi(sahifa_id)
+    props = {C.P_SUMMA: {"number": yangi_summa}}
+
+    # Sarlavha "Ism — summa — sana" ko'rinishida. Oxiridan bo'lamiz, chunki
+    # ism ichida ham " — " bo'lishi mumkin.
+    bolaklar = (eski["nomi"] or "").rsplit(" — ", 2)
+    if len(bolaklar) == 3:
+        yangi_pul = f"{int(yangi_summa):,}".replace(",", " ")
+        bolaklar[1] = yangi_pul
+        props[C.P_NOMI] = {"title": [{"text": {"content": " — ".join(bolaklar)[:200]}}]}
+
+    await _req("PATCH", f"/pages/{sahifa_id}", {"properties": props})
+    return {"eski_summa": eski["summa"], "yangi_summa": yangi_summa}
 
 
 # ---------------------------------------------------------------- yashirin kod (doimiy qidiruv)

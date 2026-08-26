@@ -75,7 +75,8 @@ P_TALABA_BALANS = "Balans"                    # formula (number)
 P_TALABA_BALANS_HOLATI = "Balans holati"      # formula (matn, masalan "🔴 Qarzdor")
 P_TALABA_ESLATMA_KERAK = "Eslatma kerak"      # formula (checkbox)
 P_TALABA_1AYLANMA = "1 aylanma"               # rollup (number)
-P_TALABA_QARZ_SANA = "Qarzga tushgan sana"    # date — bot to'ldiradi
+P_TALABA_QARZ_SANA = "Qarzga tushgan sana"    # date — Notion Automation to'ldiradi
+P_TALABA_ESLATMA_SANA = "Oxirgi eslatma sanasi"  # date — bot to'ldiradi
 
 # Yozilishlar (qo'shimcha)
 P_YOZ_NOMI = "Nomi"                 # title
@@ -88,6 +89,12 @@ P_GURUH_CHASTOTA = "Chastota"                 # number
 P_GURUH_DARS_KUNLARI = "Dars kunlari"         # multi_select
 P_GURUH_DAVOMAT_KERAK_EMAS = "Davomat kerak emas"  # checkbox
 P_GURUH_OYLIK = "Oylik to'lov"                # number (allaqachon P_GURUH_NARX bilan bir xil)
+P_GURUH_USTOZ_ISM = "Ustoz ismi (matn)"       # formula (matn)
+
+# Qarzdorlar ro'yxati
+QARZDOR_SAHIFA = 10           # bir sahifada nechta talaba
+QARZDOR_RANG = ((7, "🟢"), (20, "🟡"))   # shundan katta → 🔴
+NOMZOD_MAX = 3                # chek uchun avtomat izlashda nomzodlar soni
 
 # Davomat
 P_DAVOMAT_SANA = "Sana"             # date
