@@ -526,11 +526,13 @@ async def talabalar_eslatma():
 
 
 async def talabalar_qarzdor():
-    """Balansi manfiy talabalar. Qaytadi: {id, ism, qarz_sana, eslatma_sana}.
+    """Balansi manfiy talabalar. Qaytadi: {id, ism, balans, qarz_sana, eslatma_sana}.
+    Filtr matn ('Qarzdor' so'zi) bo'yicha emas, balansning O'ZI bo'yicha —
+    shunda 'Balans holati' matni o'zgarsa ham ishlayveradi.
     DIQQAT: 'Qarzga tushgan sana' ni Notion Automation to'ldiradi — bot
     unga tegmaydi, faqat o'qiydi."""
-    filter_ = {"property": C.P_TALABA_BALANS_HOLATI,
-               "formula": {"string": {"contains": "Qarzdor"}}}
+    filter_ = {"property": C.P_TALABA_BALANS,
+               "formula": {"number": {"less_than": 0}}}
     sahifalar = await _query_all(C.TALABALAR_DB, filter_)
     return [{
         "id": s["id"],
@@ -587,6 +589,53 @@ async def yozilishlar_hammasi():
         }
         out.setdefault(tids[0], []).append(item)
     return out
+
+
+async def talabalar_nol_balans():
+    """Balansi AYNAN 0 bo'lgan talabalar."""
+    filter_ = {"property": C.P_TALABA_BALANS,
+               "formula": {"number": {"equals": 0}}}
+    sahifalar = await _query_all(C.TALABALAR_DB, filter_)
+    return [{
+        "id": s["id"],
+        "ism": _title(s, C.P_TALABA_ISM),
+        "balans": _formula_number(s, C.P_TALABA_BALANS),
+        "qarz_sana": _date(s, C.P_TALABA_QARZ_SANA),
+        "eslatma_sana": _date(s, C.P_TALABA_ESLATMA_SANA),
+    } for s in sahifalar]
+
+
+async def talabalar_eslatma_toliq():
+    """'Eslatma kerak' ✓ bo'lgan talabalar (balansi musbat, 1 aylanmaga
+    yetadigan yoki kam). Qarzdorlar bilan bir xil ko'rinishda qaytadi."""
+    filter_ = {"property": C.P_TALABA_ESLATMA_KERAK,
+               "formula": {"checkbox": {"equals": True}}}
+    sahifalar = await _query_all(C.TALABALAR_DB, filter_)
+    return [{
+        "id": s["id"],
+        "ism": _title(s, C.P_TALABA_ISM),
+        "balans": _formula_number(s, C.P_TALABA_BALANS),
+        "qarz_sana": _date(s, C.P_TALABA_QARZ_SANA),
+        "eslatma_sana": _date(s, C.P_TALABA_ESLATMA_SANA),
+    } for s in sahifalar]
+
+
+async def keyingi_dars_sanasi(yozilish_id, dars_kunlari):
+    """Yozilish bo'yicha keyingi (bo'lajak) dars sanasini qaytaradi.
+    Davomatdagi oxirgi darsdan boshlab, guruh dars kunlariga qarab
+    hisoblanadi. Topib bo'lmasa — None."""
+    try:
+        body = {"filter": {"property": "Yozilish",
+                           "relation": {"contains": yozilish_id}},
+                "sorts": [{"property": C.P_DAVOMAT_SANA, "direction": "descending"}],
+                "page_size": 1}
+        data = await _req("POST", f"/databases/{C.DAVOMAT_DB}/query", body)
+        yozuvlar = data.get("results") or []
+        oxirgi = _date(yozuvlar[0], C.P_DAVOMAT_SANA) if yozuvlar else None
+    except Exception:
+        log.warning("Keyingi dars sanasi: Davomat o'qilmadi (%s)", yozilish_id)
+        oxirgi = None
+    return _keyingi_dars_sanasi(oxirgi, dars_kunlari)
 
 
 async def talaba_faol_yozilishlar_toliq(talaba_id, darslar_kerak=False):

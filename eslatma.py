@@ -130,6 +130,41 @@ def eslatma_matn_oylik(talaba_ism, guruh_nomi, tolov, boshlagan_sana, kod) -> st
     )
 
 
+def nol_balans_matn(talaba_ism, guruh_nomi, tolov, keyingi_sana, kod) -> str:
+    """Balansi aynan 0 bo'lgan talaba uchun matn.
+    keyingi_sana — yangi oyning 1-darsi (ISO sana) yoki None (hisoblab
+    bo'lmagan holatda umumiy jumla yoziladi)."""
+    if keyingi_sana:
+        sana_qatori = (f"📆 Yangi oyning 1-darsi: <b>{_sana_fmt(keyingi_sana)}</b> — "
+                       f"to'lovni shu sanagacha amalga oshirishingizni so'raymiz.")
+    else:
+        sana_qatori = "📆 Keyingi darsgacha to'lovni amalga oshirishingizni so'raymiz."
+    return (
+        f"📨 Assalomu alaykum. <code>{_e(talaba_ism)}</code>\n\n"
+        f"⚠️ <b>\"{_e(guruh_nomi)}\"</b> guruhida to'lovingiz tugadi.\n\n"
+        f"♻️ Kursni davom ettirasizmi?\n\n"
+        f"{sana_qatori}\n\n"
+        f"💰 To'lov: <b>{_pul(tolov)} so'm</b>\n\n"
+        f"{_KARTA_OGOHLANTIRISH}\n\n"
+        f"{kod}"
+    )
+
+
+def oylik_keyingi_dars(boshlagan_sana):
+    """Oylik guruh uchun yangi oy boshlanish sanasi (ISO) yoki None."""
+    if not boshlagan_sana:
+        return None
+    try:
+        boshlash = _dt.date.fromisoformat(boshlagan_sana[:10])
+    except Exception:
+        return None
+    bugun = _dt.date.today()
+    n = 0
+    while _oy_qosh(boshlash, n + 1) <= bugun:
+        n += 1
+    return _oy_qosh(boshlash, n + 1).isoformat()
+
+
 def qarzdor_matn(talaba_ism, guruh_nomi, tolov, kod) -> str:
     """Balansi 0/minus bo'lgan talaba uchun qisqa matn."""
     return (
