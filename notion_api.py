@@ -552,12 +552,17 @@ async def property_idlar(db_id):
     return {nomi: (m or {}).get("id") for nomi, m in props.items()}
 
 
-async def property_qiymat(sahifa_id, prop_id):
-    """/pages/{id}/properties/{prop_id} — Notion formula/rollup qiymatini
-    server tomonda hisoblab qaytaradi. Sahifa endpointidan farqli o'laroq
-    ichma-ich rollup zanjirini ham hisoblashi mumkin."""
-    from urllib.parse import quote
-    r = await _req("GET", f"/pages/{sahifa_id}/properties/{quote(prop_id, safe='')}")
+async def property_xom(sahifa_id, prop_id):
+    """/pages/{id}/properties/{prop_id} — XOM javob (tashxis uchun).
+    DIQQAT: prop_id Notion sxemasidan allaqachon kodlangan holda keladi
+    (masalan '%5Baki'), shuning uchun uni QAYTA kodlamaymiz."""
+    return await _req("GET", f"/pages/{sahifa_id}/properties/{prop_id}")
+
+
+def _property_son(r):
+    """Property javobidan sonni ajratib oladi."""
+    if not isinstance(r, dict):
+        return None
     turi = r.get("type")
     if turi == "formula":
         return (r.get("formula") or {}).get("number")
@@ -566,14 +571,23 @@ async def property_qiymat(sahifa_id, prop_id):
     if turi == "number":
         return r.get("number")
     if r.get("object") == "list":
-        natija = r.get("property_item") or {}
-        if natija.get("type") == "rollup":
-            return (natija.get("rollup") or {}).get("number")
+        pi = r.get("property_item") or {}
+        if pi.get("type") == "rollup":
+            return (pi.get("rollup") or {}).get("number")
+        natijalar = r.get("results") or []
+        if natijalar:
+            return _property_son(natijalar[0])
     return None
+
+
+async def property_qiymat(sahifa_id, prop_id):
+    """Property qiymatini son ko'rinishida qaytaradi."""
+    return _property_son(await property_xom(sahifa_id, prop_id))
 
 
 async def balans_tekshir(talaba_id, ism):
     """SINOV: balansni turli usullar bilan o'qib, natijalarni qaytaradi."""
+    import json
     natija = {}
 
     # 1) Sahifa endpointi
@@ -581,7 +595,7 @@ async def balans_tekshir(talaba_id, ism):
         s = await _req("GET", f"/pages/{talaba_id}")
         natija["1. Sahifa"] = _formula_number(s, C.P_TALABA_BALANS)
     except Exception as ex:
-        natija["1. Sahifa"] = f"xato: {str(ex)[:60]}"
+        natija["1. Sahifa"] = f"xato: {str(ex)[:50]}"
 
     # 2) So'rov endpointi
     try:
@@ -596,39 +610,28 @@ async def balans_tekshir(talaba_id, ism):
                 break
         natija["2. So'rov"] = qiymat
     except Exception as ex:
-        natija["2. So'rov"] = f"xato: {str(ex)[:60]}"
+        natija["2. So'rov"] = f"xato: {str(ex)[:50]}"
 
-    # Property ID larni bazadan topamiz
-    idlar = {}
+    # 3) Property endpointi — har maydonni alohida, XOM javob bilan
     try:
         idlar = await property_idlar(C.TALABALAR_DB)
-        natija["ID Balans"] = idlar.get(C.P_TALABA_BALANS) or "topilmadi"
-        natija["ID Sarflangan"] = idlar.get("Sarflangan (yozilishdan)") or "topilmadi"
     except Exception as ex:
-        natija["ID topish"] = f"xato: {str(ex)[:60]}"
+        natija["ID topish"] = f"xato: {str(ex)[:50]}"
+        return natija
 
-    # 3) Property endpointi — Balans
-    pid = idlar.get(C.P_TALABA_BALANS)
-    if pid:
+    for nomi in (C.P_TALABA_BALANS, "Arxiv qoldiq", "Jami to'langan",
+                 "Sarflangan (yozilishdan)"):
+        pid = idlar.get(nomi)
+        if not pid:
+            natija[nomi] = "ID topilmadi"
+            continue
         try:
-            natija["3. Property"] = await property_qiymat(talaba_id, pid)
+            xom = await property_xom(talaba_id, pid)
+            son = _property_son(xom)
+            qisqa = json.dumps(xom, ensure_ascii=False)[:110]
+            natija[nomi] = f"{son}  ⟨{qisqa}⟩"
         except Exception as ex:
-            natija["3. Property"] = f"xato: {str(ex)[:60]}"
-
-    # 4) Bo'laklarni alohida o'qib, botda hisoblash
-    try:
-        async def olish(nomi):
-            i = idlar.get(nomi)
-            return (await property_qiymat(talaba_id, i)) if i else None
-        arxiv = await olish("Arxiv qoldiq") or 0
-        tolangan = await olish("Jami to'langan") or 0
-        sarflangan = await olish("Sarflangan (yozilishdan)") or 0
-        natija["4. Hisoblab"] = arxiv + tolangan - sarflangan
-        natija["   · arxiv"] = arxiv
-        natija["   · to'langan"] = tolangan
-        natija["   · sarflangan"] = sarflangan
-    except Exception as ex:
-        natija["4. Hisoblab"] = f"xato: {str(ex)[:60]}"
+            natija[nomi] = f"xato: {str(ex)[:50]}"
 
     return natija
 
