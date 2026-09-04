@@ -1055,6 +1055,15 @@ async def _bolish_saqla(update: Update, uid: int):
 
     await javob(update, "💾 Notion'ga yozilmoqda…")
 
+    # Barcha talabalar balansini yozishdan OLDIN o'qib qo'yamiz (Notion
+    # formulani darrov qayta hisoblamaydi). Bir talaba bir necha qismda
+    # bo'lsa ham to'g'ri chiqishi uchun lug'atda yuritamiz.
+    eski_balanslar = {}
+    for q in qismlar:
+        tid = q.get("talaba_id")
+        if tid and tid not in eski_balanslar:
+            eski_balanslar[tid] = await N.talaba_balans(tid)
+
     # Chekni bir marta yuklaymiz, hamma yozuvga o'sha faylni beramiz
     upload_id = None
     if p.get("baytlar"):
@@ -1107,7 +1116,15 @@ async def _bolish_saqla(update: Update, uid: int):
                 "file_upload_id": upload_id,
                 "fayl_nomi": p.get("fayl_nomi"),
             })
-            natijalar.append(f"✅ {e(q['ism'])} — {pul(q['summa'])}")
+            tid = q.get("talaba_id")
+            eski = eski_balanslar.get(tid)
+            qator = f"✅ {e(q['ism'])} — {pul(q['summa'])}"
+            if eski is not None:
+                yangi = eski + (q["summa"] or 0)
+                belgi = "🟢" if yangi > 0 else ("⚪" if yangi == 0 else "🔴")
+                qator += f"\n   💳 {pul(eski)} → <b>{pul(yangi)}</b> {belgi}"
+                eski_balanslar[tid] = yangi   # bir talaba 2 qismda bo'lsa
+            natijalar.append(qator)
             sahifa_idlar.append(((sahifa.get("id") or "").replace("-", ""), q["ism"]))
         except Exception as ex:
             log.exception("Bo'lingan yozuv xatosi")
@@ -1310,6 +1327,17 @@ async def _sana_sorash(update: Update, uid: int, d, karta, karta_ism_bilan):
                 kb(qatorlar))
 
 
+def _balans_qatori(eski, summa):
+    """'💳 Balans: -40 000 → 20 000 so'm' qatorini yasaydi.
+    Balans o'qilmagan bo'lsa (None) — bo'sh qator qaytaradi, chunki
+    noto'g'ri raqam ko'rsatgandan ko'ra umuman ko'rsatmagan yaxshi."""
+    if eski is None:
+        return ""
+    yangi = eski + (summa or 0)
+    belgi = "🟢" if yangi > 0 else ("⚪" if yangi == 0 else "🔴")
+    return f"💳 Balans: {pul(eski)} → <b>{pul(yangi)}</b> so'm {belgi}\n"
+
+
 async def _saqla(update: Update, uid: int):
     p = holat_p(uid)
     if not p or not p.get("chek"):
@@ -1319,6 +1347,10 @@ async def _saqla(update: Update, uid: int):
     karta = p.get("karta")
 
     await javob(update, "💾 Notion'ga yozilmoqda…")
+
+    # Balansni to'lovdan OLDIN o'qib qo'yamiz. Notion formulani darrov qayta
+    # hisoblamagani uchun, yangi balansni o'zimiz hisoblaymiz (eski + summa).
+    eski_balans = await N.talaba_balans(p["talaba_id"])
 
     # Telegram ID: agar talaba tanlanganda darrov yozilgan bo'lsa — o'shani olamiz.
     # Bo'lmasa (masalan forward+chek birga kelib darrov yozilmagan bo'lsa) — shu yerda.
@@ -1397,6 +1429,7 @@ async def _saqla(update: Update, uid: int):
     xabar = (f"✅ <b>To'lov qabul qilindi</b>\n\n"
              f"👤 {e(p['talaba_nomi'])}\n"
              f"💰 {pul(d.get('summa'))} so'm\n"
+             f"{_balans_qatori(eski_balans, d.get('summa'))}"
              f"{fayl_holati}\n")
     if yozilgan_id:
         xabar += f"📝 Telegram ID saqlandi: <code>{yozilgan_id}</code>\n"

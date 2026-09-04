@@ -543,6 +543,16 @@ async def talabalar_qarzdor():
     } for s in sahifalar]
 
 
+async def talaba_balans(talaba_id):
+    """Talabaning joriy balansi (formula natijasi). O'qib bo'lmasa None."""
+    try:
+        s = await _req("GET", f"/pages/{talaba_id}")
+        return _formula_number(s, C.P_TALABA_BALANS)
+    except Exception as ex:
+        log.warning("Balans o'qilmadi (%s): %s", talaba_id, ex)
+        return None
+
+
 async def eslatma_sana_yoz(talaba_id, sana_iso=None):
     """Talabaga 'Oxirgi eslatma sanasi' ni yozadi (default — bugun)."""
     import datetime as _dt
