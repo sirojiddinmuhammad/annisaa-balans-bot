@@ -543,14 +543,36 @@ async def talabalar_qarzdor():
     } for s in sahifalar]
 
 
-async def talaba_balans(talaba_id):
-    """Talabaning joriy balansi (formula natijasi). O'qib bo'lmasa None."""
-    try:
-        s = await _req("GET", f"/pages/{talaba_id}")
-        return _formula_number(s, C.P_TALABA_BALANS)
-    except Exception as ex:
-        log.warning("Balans o'qilmadi (%s): %s", talaba_id, ex)
+async def talaba_balans(talaba_id, ism=None):
+    """Talabaning HAQIQIY balansi.
+
+    DIQQAT: GET /pages/{id} bu formulani noto'g'ri qaytaradi. Sabab —
+    'Balans' ichida rollup ustidan rollup bor:
+        Talabalar."Sarflangan (yozilishdan)"  →  Yozilishlar."Sarflangan (rollup)"
+                                                →  Davomat
+    Sahifa endpointi bunday zanjirni hisoblamaydi va uni 0 deb oladi,
+    natijada Balans = Jami to'langan bo'lib chiqadi (masalan 40 000
+    o'rniga 320 000).
+
+    So'rov endpointi (/databases/{id}/query) esa formulani to'g'ri
+    hisoblaydi — qarzdorlar ro'yxati aynan shu yo'l bilan ishlaydi.
+    Shuning uchun bu yerda ham so'rov ishlatamiz: ism bo'yicha filtrlaymiz,
+    keyin ID bo'yicha aynan o'sha talabani tanlaymiz (bir xil ismlilar
+    bo'lsa ham adashmasligi uchun).
+    """
+    if not ism:
         return None
+    kerakli = (talaba_id or "").replace("-", "")
+    try:
+        filter_ = {"property": C.P_TALABA_ISM, "title": {"equals": ism}}
+        sahifalar = await _query_all(C.TALABALAR_DB, filter_, page_size=20)
+        for s in sahifalar:
+            if s["id"].replace("-", "") == kerakli:
+                return _formula_number(s, C.P_TALABA_BALANS)
+        log.warning("Balans: ism bo'yicha topilmadi (%s)", ism)
+    except Exception as ex:
+        log.warning("Balans o'qilmadi (%s): %s", ism, ex)
+    return None
 
 
 async def eslatma_sana_yoz(talaba_id, sana_iso=None):

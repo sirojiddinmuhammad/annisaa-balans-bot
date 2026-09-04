@@ -1062,7 +1062,7 @@ async def _bolish_saqla(update: Update, uid: int):
     for q in qismlar:
         tid = q.get("talaba_id")
         if tid and tid not in eski_balanslar:
-            eski_balanslar[tid] = await N.talaba_balans(tid)
+            eski_balanslar[tid] = await N.talaba_balans(tid, q.get("ism"))
 
     # Chekni bir marta yuklaymiz, hamma yozuvga o'sha faylni beramiz
     upload_id = None
@@ -1350,7 +1350,7 @@ async def _saqla(update: Update, uid: int):
 
     # Balansni to'lovdan OLDIN o'qib qo'yamiz. Notion formulani darrov qayta
     # hisoblamagani uchun, yangi balansni o'zimiz hisoblaymiz (eski + summa).
-    eski_balans = await N.talaba_balans(p["talaba_id"])
+    eski_balans = await N.talaba_balans(p["talaba_id"], p.get("talaba_nomi"))
 
     # Telegram ID: agar talaba tanlanganda darrov yozilgan bo'lsa — o'shani olamiz.
     # Bo'lmasa (masalan forward+chek birga kelib darrov yozilmagan bo'lsa) — shu yerda.
