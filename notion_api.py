@@ -551,6 +551,31 @@ async def property_idlar(db_id):
             for nomi, m in props.items()}
 
 
+async def sarflangan_davomatdan(talaba_id):
+    """Sarflangan summani Davomatdan TO'G'RIDAN-TO'G'RI hisoblaydi.
+
+    Talabalar bazasidagi 'Sarflangan (yozilishdan)' rollupi API orqali 0
+    qaytaradi, chunki zanjir juda chuqur (4+ qavat rollup). Davomatning
+    o'zida esa 'Sarflangan' formulasi ancha yaqin turadi — shuning uchun
+    bot o'zi yig'adi.
+    Qaytadi: (jami_summa, darslar_soni)"""
+    yoz = await _query_all(C.YOZILISHLAR_DB,
+                           {"property": C.P_YOZ_TALABA,
+                            "relation": {"contains": talaba_id}})
+    jami, nechta = 0, 0
+    for y in yoz:
+        darslar = await _query_all(C.DAVOMAT_DB,
+                                   {"property": "Yozilish",
+                                    "relation": {"contains": y["id"]}})
+        for d in darslar:
+            nechta += 1
+            qiymat = _formula_number(d, "Sarflangan")
+            if qiymat is None:
+                qiymat = _number(d, "Qo'lda summa")
+            jami += qiymat or 0
+    return jami, nechta
+
+
 async def property_xom(sahifa_id, prop_id):
     """/pages/{id}/properties/{prop_id} — XOM javob (tashxis uchun).
     DIQQAT: prop_id Notion sxemasidan allaqachon kodlangan holda keladi
@@ -631,6 +656,17 @@ async def balans_tekshir(talaba_id, ism):
         if son is None:
             continue          # sonli bo'lmagan maydonlarni ko'rsatmaymiz
         natija[nomi] = son
+
+    # 4) Sarflangan — Davomatdan to'g'ridan-to'g'ri
+    try:
+        sarf, nechta = await sarflangan_davomatdan(talaba_id)
+        natija["── Davomatdan sarflangan"] = f"{sarf}  ({nechta} dars)"
+        arxiv = natija.get("Arxiv qoldiq") or 0
+        tolangan = natija.get("Jami to'langan") or 0
+        if isinstance(arxiv, (int, float)) and isinstance(tolangan, (int, float)):
+            natija["── BALANS (hisoblab)"] = arxiv + tolangan - sarf
+    except Exception as ex:
+        natija["── Davomatdan"] = f"xato: {str(ex)[:50]}"
 
     return natija
 
