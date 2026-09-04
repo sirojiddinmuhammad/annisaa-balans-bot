@@ -544,12 +544,11 @@ async def talabalar_qarzdor():
 
 
 async def property_idlar(db_id):
-    """Baza sxemasidan maydon nomi → property ID jadvalini oladi.
-    Property ID lari REST API uchun kerak (/pages/{id}/properties/{prop_id}),
-    va ular MCP ning ichki ID laridan farq qiladi."""
+    """Baza sxemasidan maydon nomi → {id, type} jadvalini oladi."""
     d = await _req("GET", f"/databases/{db_id}")
     props = d.get("properties") or {}
-    return {nomi: (m or {}).get("id") for nomi, m in props.items()}
+    return {nomi: {"id": (m or {}).get("id"), "type": (m or {}).get("type")}
+            for nomi, m in props.items()}
 
 
 async def property_xom(sahifa_id, prop_id):
@@ -587,7 +586,7 @@ async def property_qiymat(sahifa_id, prop_id):
 
 async def balans_tekshir(talaba_id, ism):
     """SINOV: balansni turli usullar bilan o'qib, natijalarni qaytaradi."""
-    import json
+
     natija = {}
 
     # 1) Sahifa endpointi
@@ -612,26 +611,26 @@ async def balans_tekshir(talaba_id, ism):
     except Exception as ex:
         natija["2. So'rov"] = f"xato: {str(ex)[:50]}"
 
-    # 3) Property endpointi — har maydonni alohida, XOM javob bilan
+    # 3) Barcha formula/rollup maydonlarni property endpointi orqali o'qiymiz
     try:
         idlar = await property_idlar(C.TALABALAR_DB)
     except Exception as ex:
         natija["ID topish"] = f"xato: {str(ex)[:50]}"
         return natija
 
-    for nomi in (C.P_TALABA_BALANS, "Arxiv qoldiq", "Jami to'langan",
-                 "Sarflangan (yozilishdan)"):
-        pid = idlar.get(nomi)
+    for nomi, m in sorted(idlar.items()):
+        if m.get("type") not in ("formula", "rollup"):
+            continue
+        pid = m.get("id")
         if not pid:
-            natija[nomi] = "ID topilmadi"
             continue
         try:
-            xom = await property_xom(talaba_id, pid)
-            son = _property_son(xom)
-            qisqa = json.dumps(xom, ensure_ascii=False)[:110]
-            natija[nomi] = f"{son}  ⟨{qisqa}⟩"
+            son = _property_son(await property_xom(talaba_id, pid))
         except Exception as ex:
-            natija[nomi] = f"xato: {str(ex)[:50]}"
+            son = f"xato: {str(ex)[:40]}"
+        if son is None:
+            continue          # sonli bo'lmagan maydonlarni ko'rsatmaymiz
+        natija[nomi] = son
 
     return natija
 
