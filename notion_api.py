@@ -543,6 +543,74 @@ async def talabalar_qarzdor():
     } for s in sahifalar]
 
 
+async def property_qiymat(sahifa_id, prop_id):
+    """/pages/{id}/properties/{prop_id} — Notion formula/rollup qiymatini
+    server tomonda hisoblab qaytaradi. Sahifa endpointidan farqli o'laroq
+    ichma-ich rollup zanjirini ham hisoblashi mumkin."""
+    r = await _req("GET", f"/pages/{sahifa_id}/properties/{prop_id}")
+    turi = r.get("type")
+    if turi == "formula":
+        return (r.get("formula") or {}).get("number")
+    if turi == "rollup":
+        return (r.get("rollup") or {}).get("number")
+    if turi == "number":
+        return r.get("number")
+    # property_item ro'yxat ko'rinishida kelsa
+    if r.get("object") == "list":
+        natija = r.get("property_item") or {}
+        if natija.get("type") == "rollup":
+            return (natija.get("rollup") or {}).get("number")
+    return None
+
+
+async def balans_tekshir(talaba_id, ism):
+    """SINOV: balansni 4 xil usul bilan o'qib, natijalarni qaytaradi.
+    Qaysi usul Notiondagi haqiqiy qiymatga mos kelishini aniqlash uchun."""
+    natija = {}
+
+    # 1) Sahifa endpointi
+    try:
+        s = await _req("GET", f"/pages/{talaba_id}")
+        natija["1. Sahifa"] = _formula_number(s, C.P_TALABA_BALANS)
+    except Exception as ex:
+        natija["1. Sahifa"] = f"xato: {ex}"
+
+    # 2) So'rov endpointi (ism bo'yicha filtr)
+    try:
+        kerakli = (talaba_id or "").replace("-", "")
+        sahifalar = await _query_all(
+            C.TALABALAR_DB,
+            {"property": C.P_TALABA_ISM, "title": {"equals": ism}}, page_size=20)
+        qiymat = None
+        for s in sahifalar:
+            if s["id"].replace("-", "") == kerakli:
+                qiymat = _formula_number(s, C.P_TALABA_BALANS)
+                break
+        natija["2. So'rov"] = qiymat
+    except Exception as ex:
+        natija["2. So'rov"] = f"xato: {ex}"
+
+    # 3) Property endpointi — Balans formulasi
+    try:
+        natija["3. Property"] = await property_qiymat(talaba_id, C.PID_BALANS)
+    except Exception as ex:
+        natija["3. Property"] = f"xato: {ex}"
+
+    # 4) Bo'laklarni alohida o'qib, botda hisoblash
+    try:
+        arxiv = await property_qiymat(talaba_id, C.PID_ARXIV_QOLDIQ) or 0
+        tolangan = await property_qiymat(talaba_id, C.PID_JAMI_TOLANGAN) or 0
+        sarflangan = await property_qiymat(talaba_id, C.PID_SARFLANGAN) or 0
+        natija["4. Hisoblab"] = arxiv + tolangan - sarflangan
+        natija["   · arxiv"] = arxiv
+        natija["   · to'langan"] = tolangan
+        natija["   · sarflangan"] = sarflangan
+    except Exception as ex:
+        natija["4. Hisoblab"] = f"xato: {ex}"
+
+    return natija
+
+
 async def talaba_balans(talaba_id, ism=None):
     """Talabaning HAQIQIY balansi.
 

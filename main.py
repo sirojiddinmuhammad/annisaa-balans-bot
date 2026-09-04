@@ -178,6 +178,40 @@ async def bekor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await javob(update, "🧹 Bekor qilindi.")
 
 
+async def balans_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """SINOV: /balans <ism> — balansni 4 xil usul bilan o'qib ko'rsatadi.
+    Qaysi usul Notiondagi haqiqiy qiymatga mos kelishini aniqlash uchun."""
+    if not admin_mi(update):
+        return
+    matn = (update.effective_message.text or "").split(maxsplit=1)
+    if len(matn) < 2:
+        await javob(update, "Ishlatish: <code>/balans Ra'no Fozilxon</code>")
+        return
+    ism = matn[1].strip()
+
+    kutish = await update.effective_message.reply_text("🔍 Tekshirilmoqda…")
+    try:
+        aniq, taxminlar = await N.talaba_izla(ism)
+        talaba = aniq or (taxminlar[0] if taxminlar else None)
+        if not talaba:
+            await kutish.edit_text("❌ Talaba topilmadi.")
+            return
+        natija = await N.balans_tekshir(talaba["id"], talaba["ism"])
+    except Exception as ex:
+        log.exception("Balans tekshiruvi")
+        await kutish.edit_text(f"❌ Xato: <code>{e(ex)}</code>",
+                               parse_mode=ParseMode.HTML)
+        return
+
+    qatorlar = [f"<b>{e(talaba['ism'])}</b>", ""]
+    for kalit, qiymat in natija.items():
+        korinish = pul(qiymat) if isinstance(qiymat, (int, float)) else str(qiymat)
+        qatorlar.append(f"{e(kalit)}: <b>{e(korinish)}</b>")
+    qatorlar.append("")
+    qatorlar.append("<i>Notiondagi haqiqiy qiymat bilan solishtiring.</i>")
+    await kutish.edit_text("\n".join(qatorlar), parse_mode=ParseMode.HTML)
+
+
 async def kesh_yangila(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not admin_mi(update):
         return
@@ -1835,6 +1869,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bekor", bekor))
     app.add_handler(CommandHandler("kesh", kesh_yangila))
+    app.add_handler(CommandHandler("balans", balans_cmd))
     app.add_handler(CommandHandler("qarzdorlar", qarzdorlar_cmd))
 
     if app.job_queue is not None:

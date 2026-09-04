@@ -91,6 +91,14 @@ P_GURUH_DAVOMAT_KERAK_EMAS = "Davomat kerak emas"  # checkbox
 P_GURUH_OYLIK = "Oylik to'lov"                # number (allaqachon P_GURUH_NARX bilan bir xil)
 P_GURUH_USTOZ_ISM = "Ustoz ismi (matn)"       # formula (matn)
 
+# Talabalar bazasidagi property ID lari
+# (/pages/{id}/properties/{prop_id} endpointi uchun — formula/rollup
+#  qiymatlarini Notion server tomonda hisoblab beradi)
+PID_BALANS = "W2FraQ"            # Balans (formula)
+PID_JAMI_TOLANGAN = "T15YZQ"     # Jami to'langan (rollup)
+PID_SARFLANGAN = "VUNCPA"        # Sarflangan (yozilishdan) (rollup)
+PID_ARXIV_QOLDIQ = "WmxZXQ"      # Arxiv qoldiq (rollup)
+
 # Qarzdorlar ro'yxati
 QARZDOR_SAHIFA = 10           # bir sahifada nechta talaba
 QARZDOR_RANG = ((7, "🟢"), (20, "🟡"))   # shundan katta → 🔴
