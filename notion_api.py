@@ -367,15 +367,26 @@ async def dublikat_izla(trx=None, fayl_id=None, hash_=None,
         res = await _query_all(C.TOLOVLAR_DB, f, page_size=5)
         if res:
             return sabab, res[0]
+    # Zaif tekshiruv: summa + sana + karta. Bu uchtasi bir kunda osongina
+    # takrorlanadi (bir xil oylik to'lovni bir necha ota-ona bir kunda,
+    # bir kartaga yuborishi mumkin). Shuning uchun tranzaksiya ID bilan
+    # ajratamiz: agar ikkalasida ham ID bor va ular BOSHQA bo'lsa —
+    # bu turli to'lovlar, takror emas.
     if summa and sana and karta_id:
         f = {"and": [
             {"property": C.P_SUMMA, "number": {"equals": summa}},
             {"property": C.P_SANA, "date": {"equals": sana[:10]}},
             {"property": C.P_KARTA, "relation": {"contains": karta_id}},
         ]}
-        res = await _query_all(C.TOLOVLAR_DB, f, page_size=5)
-        if res:
-            return "Summa + sana + karta bir xil", res[0]
+        res = await _query_all(C.TOLOVLAR_DB, f, page_size=10)
+        yangi_trx = str(trx).strip() if trx else ""
+        for eski in res:
+            eski_trx = (_text(eski, C.P_TRX) or "").strip()
+            if yangi_trx and eski_trx and yangi_trx != eski_trx:
+                log.info("Dublikat emas: tranzaksiya ID boshqa (%s ≠ %s)",
+                         yangi_trx, eski_trx)
+                continue
+            return "Summa + sana + karta bir xil", eski
     return None, None
 
 
