@@ -568,6 +568,23 @@ async def _royxat_matni(tur, item, y, kod):
                                    y["tolov"], darslar, kod)
 
 
+async def _uzun_yubor(bot, chat_id, matn, chegara=3800):
+    """Uzun xabarni bo'lib yuboradi (Telegram chegarasi 4096 belgi).
+    Qatorlar bo'yicha bo'ladi — HTML teglari buzilmasligi uchun."""
+    qatorlar = matn.split("\n")
+    bolak, uzunlik = [], 0
+    for q in qatorlar:
+        if uzunlik + len(q) + 1 > chegara and bolak:
+            await bot.send_message(chat_id, "\n".join(bolak),
+                                   parse_mode=ParseMode.HTML)
+            bolak, uzunlik = [], 0
+        bolak.append(q)
+        uzunlik += len(q) + 1
+    if bolak:
+        await bot.send_message(chat_id, "\n".join(bolak),
+                               parse_mode=ParseMode.HTML)
+
+
 # ============================================================ KUNLIK HISOBOT
 async def _hisobot_yasash():
     """Kunlik hisobot matnini yasaydi.
@@ -651,7 +668,11 @@ async def hisobot_yubor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await kutish.edit_text(f"\u274c Xato: <code>{e(ex)}</code>",
                                parse_mode=ParseMode.HTML)
         return
-    await kutish.edit_text(matn, parse_mode=ParseMode.HTML)
+    try:
+        await kutish.delete()
+    except Exception:
+        pass
+    await _uzun_yubor(ctx.bot, update.effective_chat.id, matn)
 
 
 async def kunlik_hisobot(ctx: ContextTypes.DEFAULT_TYPE):
@@ -667,7 +688,7 @@ async def kunlik_hisobot(ctx: ContextTypes.DEFAULT_TYPE):
         return
     for admin_id in C.ADMIN_IDS:
         try:
-            await ctx.bot.send_message(admin_id, matn, parse_mode=ParseMode.HTML)
+            await _uzun_yubor(ctx.bot, admin_id, matn)
         except Exception:
             log.exception("Kunlik hisobot yuborilmadi: admin=%s", admin_id)
 
