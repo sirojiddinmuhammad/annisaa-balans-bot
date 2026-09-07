@@ -714,6 +714,104 @@ async def talaba_balans(talaba_id, ism=None):
     return None
 
 
+async def sana_yoz(talaba_id, maydon, sana_iso=None):
+    """Talabaning sana maydoniga yozadi. sana_iso=None → o'chiradi (bo'shatadi).
+    Oddiy Date maydon bo'lgani uchun API bilan muammosiz ishlaydi."""
+    qiymat = {"start": sana_iso} if sana_iso else None
+    try:
+        await _req("PATCH", f"/pages/{talaba_id}", {
+            "properties": {maydon: {"date": qiymat}}})
+        return True
+    except Exception as ex:
+        log.warning("Sana yozilmadi (%s / %s): %s", maydon, talaba_id, ex)
+        return False
+
+
+async def qarzdormi(talaba_id, ism):
+    """Talaba HOZIR qarzdormi? Balans QIYMATINI o'qimaymiz (API uni noto'g'ri
+    hisoblaydi), balki Notiondan filtr bilan SO'RAYMIZ — filtrni Notion o'z
+    ichida hisoblagani uchun javob to'g'ri bo'ladi.
+    None qaytsa — aniqlab bo'lmadi (tegmaslik kerak)."""
+    if not ism:
+        return None
+    try:
+        f = {"and": [
+            {"property": C.P_TALABA_ISM, "title": {"equals": ism}},
+            {"property": C.P_TALABA_BALANS, "formula": {"number": {"less_than": 0}}},
+        ]}
+        sahifalar = await _query_all(C.TALABALAR_DB, f, page_size=20)
+        kerakli = (talaba_id or "").replace("-", "")
+        return any(s["id"].replace("-", "") == kerakli for s in sahifalar)
+    except Exception as ex:
+        log.warning("Qarzdorlik tekshirilmadi (%s): %s", ism, ex)
+        return None
+
+
+async def tolovdan_keyin_sanalar(talaba_id, ism):
+    """Chek qabul qilingach sanalarni tozalaydi.
+    - Balansi tugagan sana / 1 dars qolgan sana → shartsiz o'chadi
+    - Qarzga tushgan sana → faqat qarzdorlar ro'yxatidan chiqqan bo'lsa"""
+    await sana_yoz(talaba_id, C.P_TALABA_NOL_SANA, None)
+    await sana_yoz(talaba_id, C.P_TALABA_1DARS_SANA, None)
+    hali_qarzdor = await qarzdormi(talaba_id, ism)
+    if hali_qarzdor is False:
+        await sana_yoz(talaba_id, C.P_TALABA_QARZ_SANA, None)
+    return hali_qarzdor
+
+
+async def talabalar_sana_boyicha(maydon, sana_iso):
+    """Berilgan sana maydoni AYNAN shu kunga teng bo'lgan talabalar."""
+    f = {"property": maydon, "date": {"equals": sana_iso}}
+    sahifalar = await _query_all(C.TALABALAR_DB, f)
+    return [{"id": s["id"], "ism": _title(s, C.P_TALABA_ISM)} for s in sahifalar]
+
+
+async def talabalar_sana_bor(maydon):
+    """Sana maydoni to'ldirilgan barcha talabalar (tozalash uchun)."""
+    f = {"property": maydon, "date": {"is_not_empty": True}}
+    sahifalar = await _query_all(C.TALABALAR_DB, f)
+    return [{"id": s["id"], "ism": _title(s, C.P_TALABA_ISM),
+             "sana": _date(s, maydon)} for s in sahifalar]
+
+
+async def sanalarni_tekshir(bugun_iso):
+    """Kunlik to'liq tekshiruv (08:00). Uch holat uchun:
+      - holatda bor, sana bo'sh   → bugungi sanani yozadi
+      - holatda yo'q, sana bor    → sanani o'chiradi
+    Qaytadi: {maydon: {"yangi": [ismlar], "tozalandi": n}}"""
+    natija = {}
+    holatlar = (
+        (C.P_TALABA_QARZ_SANA, talabalar_qarzdor),
+        (C.P_TALABA_NOL_SANA, talabalar_nol_balans),
+        (C.P_TALABA_1DARS_SANA, talabalar_eslatma_toliq),
+    )
+    for maydon, olish in holatlar:
+        try:
+            hozirgi = await olish()
+        except Exception:
+            log.exception("Holat ro'yxati olinmadi: %s", maydon)
+            continue
+        hozirgi_idlar = {t["id"] for t in hozirgi}
+        sana_borlar = {t["id"] for t in await talabalar_sana_bor(maydon)}
+
+        # 1) Holatga yangi tushganlarga bugungi sanani yozamiz
+        yangi = []
+        for t in hozirgi:
+            if t["id"] not in sana_borlar:
+                if await sana_yoz(t["id"], maydon, bugun_iso):
+                    yangi.append(t)
+
+        # 2) Holatdan chiqqanlarning sanasini o'chiramiz
+        tozalandi = 0
+        for tid in sana_borlar:
+            if tid not in hozirgi_idlar:
+                if await sana_yoz(tid, maydon, None):
+                    tozalandi += 1
+
+        natija[maydon] = {"yangi": yangi, "tozalandi": tozalandi}
+    return natija
+
+
 async def eslatma_sana_yoz(talaba_id, sana_iso=None):
     """Talabaga 'Oxirgi eslatma sanasi' ni yozadi (default — bugun)."""
     import datetime as _dt

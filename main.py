@@ -14,6 +14,7 @@ Ish tartibi:
 import asyncio
 import html
 import logging
+import time
 from datetime import date, datetime, timedelta, timezone
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
@@ -78,10 +79,11 @@ def kb(qatorlar):
 
 # Ekran pastida doim turadigan klaviatura
 TUGMA_QARZDOR = "📋 Qarzdorlar"
+TUGMA_BUGUN = "📊 Bugun"
 TUGMA_NOL = "⚪ Balansi 0"
 TUGMA_ESLATMA = "⏳ 1 dars qoldi"
 ASOSIY_KB = ReplyKeyboardMarkup(
-    [[KeyboardButton(TUGMA_QARZDOR)],
+    [[KeyboardButton(TUGMA_QARZDOR), KeyboardButton(TUGMA_BUGUN)],
      [KeyboardButton(TUGMA_NOL), KeyboardButton(TUGMA_ESLATMA)]],
     resize_keyboard=True, is_persistent=True,
     input_field_placeholder="Chek yuboring yoki tugmani bosing")
@@ -161,12 +163,12 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "2️⃣ Bot talabani o'zi izlaydi — tanlaysiz\n"
         "3️⃣ Necha talabaga bo'linishini belgilaysiz\n"
         "4️⃣ To'lov bazaga yoziladi\n\n"
-        "📋 <b>Qarzdorlar</b> tugmasi — qarzdorlar ro'yxati, "
-        "raqamni bosib eslatma matnini olasiz.\n\n"
+        "📋 <b>Qarzdorlar</b> · ⚪ <b>Balansi 0</b> · ⏳ <b>1 dars qoldi</b> — "
+        "ro'yxatlar, raqamni bosib eslatma matnini olasiz.\n"
+        "📊 <b>Bugun</b> — kunlik hisobot.\n\n"
         "<code>/bekor</code> — bekor qilish\n"
         "<code>/kesh</code> — ro'yxatlarni yangilash\n\n"
-        "🔔 Har kuni 05:00 da puli tugab qolayotganlarga "
-        "avtomat eslatma keladi.\n\n"
+        f"🔔 Har kuni {C.HISOBOT_SOATI:02d}:00 da kunlik hisobot keladi.\n\n"
         f"Sizning ID: <code>{uid}</code>",
         parse_mode=ParseMode.HTML, reply_markup=ASOSIY_KB)
 
@@ -393,8 +395,14 @@ async def _qarzdorlar_yukla(update: Update, uid: int, tur="qarzdor"):
                                parse_mode=ParseMode.HTML)
         return None
     await kutish.delete()
-    QARZDOR_HOLAT[uid] = {"hammasi": royxat, "tur": tur}
+    QARZDOR_HOLAT[uid] = {"hammasi": royxat, "tur": tur, "vaqt": time.time()}
     return royxat
+
+
+def _kesh_yaroqli(h):
+    """Ro'yxat keshi hali yangimi? (C.QARZDOR_KESH_TTL soniya)"""
+    vaqt = (h or {}).get("vaqt")
+    return bool(vaqt) and (time.time() - vaqt) < C.QARZDOR_KESH_TTL
 
 
 async def qarzdorlar_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -422,7 +430,7 @@ async def _oddiy_royxat(update: Update, uid: int, tur: str):
 async def _qarzdor_filtr_royxati(update: Update, uid: int, tur: str):
     """Ustoz yoki guruh ro'yxatini chiqaradi (faqat qarzdori borlari)."""
     h = QARZDOR_HOLAT.get(uid) or {}
-    hammasi = h.get("hammasi")
+    hammasi = h.get("hammasi") if _kesh_yaroqli(h) else None
     if hammasi is None:
         hammasi = await _qarzdorlar_yukla(update, uid)
         if hammasi is None:
@@ -482,7 +490,7 @@ async def _qarzdor_filtrla(update: Update, uid: int, tur: str, idx: int):
 
 async def _qarzdor_hammasi(update: Update, uid: int):
     h = QARZDOR_HOLAT.get(uid) or {}
-    hammasi = h.get("hammasi")
+    hammasi = h.get("hammasi") if _kesh_yaroqli(h) else None
     if hammasi is None:
         hammasi = await _qarzdorlar_yukla(update, uid)
         if hammasi is None:
@@ -519,12 +527,10 @@ async def _qarzdor_tanlandi(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # Xotiradagi ro'yxatni ham yangilaymiz (qayta yuklamasdan)
     item["eslatma_kun"] = 0
 
-    # Talabani tanlangan qilib qo'yamiz — chek shu talabaga yoziladi
+    # Talabani tanlangan qilib qo'yamiz — chek shu talabaga yoziladi.
+    # Suhbatga xabar yozmaymiz: forward qilishga xalaqit beradi.
     holat_saqla(uid, talaba_id=item["talaba_id"],
                 talaba_nomi=item["talaba_ism"], stage="chek_kutish")
-    await javob_yangi(update,
-                      f"\u2705 <b>{e(item['talaba_ism'])}</b> tanlandi.\n"
-                      f"\U0001f4ce Chek kelsa shu talabaga yoziladi.")
 
 
 async def _royxat_matni(tur, item, y, kod):
@@ -562,53 +568,108 @@ async def _royxat_matni(tur, item, y, kod):
                                    y["tolov"], darslar, kod)
 
 
-# ============================================================ ESLATMA (05:00 avtomat)
-async def _eslatma_xabar_yubor(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int,
-                              talaba_ism: str, talaba_id: str, y: dict):
-    kod = ES.kod_yasash(y["yozilish_id"], talaba_id, talaba_ism, y["guruh_nomi"])
-    if y["oylikmi"]:
-        matn = ES.eslatma_matn_oylik(talaba_ism, y["guruh_nomi"], y["tolov"],
-                                     y.get("boshlagan_sana"), kod)
-    else:
-        matn = ES.eslatma_matn_darsbay(talaba_ism, y["guruh_nomi"], y["tolov"],
-                                       y.get("darslar") or [], kod)
-    await ctx.bot.send_message(chat_id, matn, parse_mode=ParseMode.HTML)
+# ============================================================ KUNLIK HISOBOT
+async def _hisobot_yasash():
+    """Kunlik hisobot matnini yasaydi.
+    Avval sanalarni tekshirib/tozalab chiqadi, keyin sonlar va 'bugun
+    holatga tushganlar' ro'yxatini yig'adi."""
+    bugun = datetime.now(TZ).date()
+    bugun_iso = bugun.isoformat()
+
+    # 1) Sanalarni tekshirib chiqamiz (yangilariga yozadi, chiqqanlarnikini o'chiradi)
+    try:
+        await N.sanalarni_tekshir(bugun_iso)
+    except Exception:
+        log.exception("Sanalarni tekshirishda xato")
+
+    # 2) Sonlar
+    sonlar = {}
+    for kalit, olish in (("qarzdor", N.talabalar_qarzdor),
+                          ("nol", N.talabalar_nol_balans),
+                          ("eslatma", N.talabalar_eslatma_toliq)):
+        try:
+            sonlar[kalit] = len(await olish())
+        except Exception:
+            log.exception("Son olinmadi: %s", kalit)
+            sonlar[kalit] = None
+
+    def son(k):
+        return f"{sonlar[k]} ta" if sonlar.get(k) is not None else "—"
+
+    qatorlar = [
+        f"\U0001f4ca <b>{bugun.strftime('%d/%m')} — Kunlik hisobot</b>",
+        "",
+        f"\U0001f534 Qarzdorlar: <b>{son('qarzdor')}</b>",
+        f"\u26aa Balansi tugaganlar: <b>{son('nol')}</b>",
+        f"\u23f3 1 dars qolganlar: <b>{son('eslatma')}</b>",
+    ]
+
+    # 3) Bugun holatga tushganlar
+    gmap = await N.guruhlar_map()
+    barcha_yoz = await N.yozilishlar_hammasi()
+
+    bolimlar = (
+        ("\U0001f195 Bugun qarzga kirdi", C.P_TALABA_QARZ_SANA),
+        ("\U0001f195 Balansi bugun tugadi", C.P_TALABA_NOL_SANA),
+        ("\U0001f195 Bugun 1 dars qoldi", C.P_TALABA_1DARS_SANA),
+    )
+    for sarlavha, maydon in bolimlar:
+        try:
+            talabalar = await N.talabalar_sana_boyicha(maydon, bugun_iso)
+        except Exception:
+            log.exception("Bugungi ro'yxat olinmadi: %s", maydon)
+            continue
+        if not talabalar:
+            continue
+        satrlar = []
+        for t in talabalar:
+            yozilishlar = barcha_yoz.get(t["id"]) or []
+            if not yozilishlar:
+                satrlar.append(f"- {e(t['ism'])}")
+                continue
+            # Har guruh alohida qator
+            for y in yozilishlar:
+                ustoz = (y.get("ustoz") or "").strip() or "—"
+                satrlar.append(
+                    f"- {e(t['ism'])} · {e(y['guruh_nomi'])} · {e(ustoz)}")
+        qatorlar.append("\u2501" * 15)
+        qatorlar.append(f"{sarlavha} ({len(talabalar)})")
+        qatorlar.extend(satrlar)
+
+    return "\n".join(qatorlar)
 
 
-async def eslatma_avtomat(ctx: ContextTypes.DEFAULT_TYPE):
-    """Har kuni 05:00 (Toshkent) da ishga tushadi."""
+async def hisobot_yubor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tugma bosilganda — bugungi hisobot."""
+    if not admin_mi(update):
+        return
+    kutish = await update.effective_message.reply_text("\U0001f4ca Hisobot tayyorlanmoqda\u2026")
+    try:
+        matn = await _hisobot_yasash()
+    except Exception as ex:
+        log.exception("Hisobot yasalmadi")
+        await kutish.edit_text(f"\u274c Xato: <code>{e(ex)}</code>",
+                               parse_mode=ParseMode.HTML)
+        return
+    await kutish.edit_text(matn, parse_mode=ParseMode.HTML)
+
+
+async def kunlik_hisobot(ctx: ContextTypes.DEFAULT_TYPE):
+    """Har kuni C.HISOBOT_SOATI da (Toshkent) adminlarga yuboriladi.
+    O'zgarish bo'lmasa ham sonlar keladi."""
     if not C.ADMIN_IDS:
-        log.warning("ADMIN_IDS bo'sh — eslatma avtomat hech kimga yubormadi.")
+        log.warning("ADMIN_IDS bo'sh — kunlik hisobot yuborilmadi.")
         return
     try:
-        talabalar = await N.talabalar_eslatma()
+        matn = await _hisobot_yasash()
     except Exception:
-        log.exception("Eslatma ro'yxati olinmadi (avtomat)")
+        log.exception("Kunlik hisobot yasalmadi")
         return
-
-    xabarlar = []
-    for t in talabalar:
-        try:
-            yozilishlar = await N.talaba_faol_yozilishlar_toliq(t["id"], darslar_kerak=True)
-        except Exception:
-            log.exception("Eslatma yozilishlari olinmadi: %s", t["ism"])
-            continue
-        for y in yozilishlar:
-            xabarlar.append((t["ism"], t["id"], y))
-
-    if not xabarlar:
-        log.info("Eslatma avtomat: bugun hech kim yo'q.")
-        return
-
     for admin_id in C.ADMIN_IDS:
         try:
-            await ctx.bot.send_message(
-                admin_id, f"🔔 Bugun <b>{len(xabarlar)} ta</b> eslatma bor",
-                parse_mode=ParseMode.HTML)
-            for ism, talaba_id, y in xabarlar:
-                await _eslatma_xabar_yubor(ctx, admin_id, ism, talaba_id, y)
+            await ctx.bot.send_message(admin_id, matn, parse_mode=ParseMode.HTML)
         except Exception:
-            log.exception("Eslatma avtomat yuborilmadi: admin=%s", admin_id)
+            log.exception("Kunlik hisobot yuborilmadi: admin=%s", admin_id)
 
 
 # ============================================================ talaba topish
@@ -1182,6 +1243,14 @@ async def _bolish_saqla(update: Update, uid: int):
         xabar += f"\n\n⚠️ <b>Ortiqcha taqsimlandi: {pul(-qoldiq)}</b>"
     xabar += "\n\n🏷 Hammasi Shubhali deb belgilandi (tekshirib qo'ying)."
 
+    # Har talabaning holat sanalarini tozalaymiz
+    for tid, ism_q in {q.get("talaba_id"): q.get("ism") for q in qismlar}.items():
+        if tid:
+            try:
+                await N.tolovdan_keyin_sanalar(tid, ism_q)
+            except Exception:
+                log.exception("Sanalar tozalanmadi: %s", ism_q)
+
     # Har qismga alohida "tuzatish" tugmasi. Qismlar bir-biriga bog'liq
     # bo'lgani uchun (yig'indi chek summasiga teng bo'lishi kerak) — guruhni
     # eslab qolamiz, keyin tuzatishda yig'indi to'g'riligini tekshiramiz.
@@ -1470,6 +1539,14 @@ async def _saqla(update: Update, uid: int):
     if p.get("shubhali"):
         xabar += "🏷 Shubhali deb belgilandi\n"
     xabar += f"\n<a href='{sahifa.get('url')}'>Notion'da ochish</a>"
+
+    # To'lov kelgach holat sanalarini tozalaymiz (qarzga tushgan sana faqat
+    # talaba qarzdorlar ro'yxatidan chiqqan bo'lsa o'chadi)
+    try:
+        await N.tolovdan_keyin_sanalar(p["talaba_id"], p.get("talaba_nomi"))
+    except Exception:
+        log.exception("Sanalar tozalanmadi")
+
     sid = (sahifa.get("id") or "").replace("-", "")
     tuzat = kb([[InlineKeyboardButton("✏️ Summani tuzatish",
                                       callback_data=f"fx:{sid}")]]) if sid else None
@@ -1612,6 +1689,9 @@ async def matn_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Doimiy klaviaturadagi tugmalar (oddiy matn bo'lib keladi)
     if matn == TUGMA_QARZDOR:
         await qarzdorlar_filtr_sorash(update, uid)
+        return
+    if matn == TUGMA_BUGUN:
+        await hisobot_yubor(update, ctx)
         return
     if matn == TUGMA_NOL:
         await _oddiy_royxat(update, uid, "nol")
@@ -1875,8 +1955,9 @@ def main():
     if app.job_queue is not None:
         import datetime as _dt
         app.job_queue.run_daily(
-            eslatma_avtomat, time=_dt.time(hour=5, minute=0, tzinfo=TZ),
-            name="eslatma_avtomat")
+            kunlik_hisobot,
+            time=_dt.time(hour=C.HISOBOT_SOATI, minute=0, tzinfo=TZ),
+            name="kunlik_hisobot")
     else:
         log.warning(
             "JobQueue mavjud emas — requirements.txt da "
