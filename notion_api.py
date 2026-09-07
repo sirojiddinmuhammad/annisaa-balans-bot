@@ -351,7 +351,7 @@ async def karta_top_ism(qabul_fio):
 
 # ---------------------------------------------------------------- dublikat
 async def dublikat_izla(trx=None, fayl_id=None, hash_=None,
-                        summa=None, sana=None, karta_id=None):
+                        summa=None, sana=None, karta_id=None, yub_karta=None):
     """Takroriy chekni qidiradi. Topilsa (sabab, yozuv)."""
     tekshiruvlar = []
     if trx:
@@ -369,9 +369,9 @@ async def dublikat_izla(trx=None, fayl_id=None, hash_=None,
             return sabab, res[0]
     # Zaif tekshiruv: summa + sana + karta. Bu uchtasi bir kunda osongina
     # takrorlanadi (bir xil oylik to'lovni bir necha ota-ona bir kunda,
-    # bir kartaga yuborishi mumkin). Shuning uchun tranzaksiya ID bilan
-    # ajratamiz: agar ikkalasida ham ID bor va ular BOSHQA bo'lsa —
-    # bu turli to'lovlar, takror emas.
+    # bir kartaga yuborishi mumkin). Shuning uchun ikkita ajratuvchi belgi
+    # bilan tekshiramiz: tranzaksiya ID va yuboruvchi karta. Ikkalasida ham
+    # bor va bittasi BOSHQA bo'lsa — bu turli to'lovlar, takror emas.
     if summa and sana and karta_id:
         f = {"and": [
             {"property": C.P_SUMMA, "number": {"equals": summa}},
@@ -380,11 +380,17 @@ async def dublikat_izla(trx=None, fayl_id=None, hash_=None,
         ]}
         res = await _query_all(C.TOLOVLAR_DB, f, page_size=10)
         yangi_trx = str(trx).strip() if trx else ""
+        yangi_yk = str(yub_karta).strip() if yub_karta else ""
         for eski in res:
             eski_trx = (_text(eski, C.P_TRX) or "").strip()
+            eski_yk = (_text(eski, C.P_YUB_KARTA) or "").strip()
             if yangi_trx and eski_trx and yangi_trx != eski_trx:
                 log.info("Dublikat emas: tranzaksiya ID boshqa (%s ≠ %s)",
                          yangi_trx, eski_trx)
+                continue
+            if yangi_yk and eski_yk and yangi_yk != eski_yk:
+                log.info("Dublikat emas: yuboruvchi karta boshqa (%s ≠ %s)",
+                         yangi_yk, eski_yk)
                 continue
             return "Summa + sana + karta bir xil", eski
     return None, None

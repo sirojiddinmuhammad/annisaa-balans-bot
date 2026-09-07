@@ -1369,7 +1369,8 @@ async def _tasdiq_yoki_saqla(update: Update, uid: int):
     sabab, eski = await N.dublikat_izla(
         trx=d.get("tranzaksiya_id"), fayl_id=p.get("fayl_unique"),
         hash_=p.get("hash"), summa=d.get("summa"), sana=d.get("sana"),
-        karta_id=karta["id"] if karta else None)
+        karta_id=karta["id"] if karta else None,
+        yub_karta=d.get("yuboruvchi_karta"))
     if sabab:
         holat_saqla(uid, karta=karta, karta_mos=karta_mos,
                     karta_ism_bilan=karta_ism_bilan, shubhali=True,
