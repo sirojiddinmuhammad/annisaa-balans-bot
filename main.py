@@ -80,7 +80,7 @@ def kb(qatorlar):
 # Ekran pastida doim turadigan klaviatura
 TUGMA_QARZDOR = "📋 Qarzdorlar"
 TUGMA_BUGUN = "📊 Bugun"
-TUGMA_NOL = "⚪ Balansi 0"
+TUGMA_NOL = "⚪ Balansi tugagan"
 TUGMA_ESLATMA = "⏳ 1 dars qoldi"
 ASOSIY_KB = ReplyKeyboardMarkup(
     [[KeyboardButton(TUGMA_QARZDOR), KeyboardButton(TUGMA_BUGUN)],
@@ -163,7 +163,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "2️⃣ Bot talabani o'zi izlaydi — tanlaysiz\n"
         "3️⃣ Necha talabaga bo'linishini belgilaysiz\n"
         "4️⃣ To'lov bazaga yoziladi\n\n"
-        "📋 <b>Qarzdorlar</b> · ⚪ <b>Balansi 0</b> · ⏳ <b>1 dars qoldi</b> — "
+        "📋 <b>Qarzdorlar</b> · ⚪ <b>Balansi tugagan</b> · ⏳ <b>1 dars qoldi</b> — "
         "ro'yxatlar, raqamni bosib eslatma matnini olasiz.\n"
         "📊 <b>Bugun</b> — kunlik hisobot.\n\n"
         "<code>/bekor</code> — bekor qilish\n"
@@ -418,7 +418,7 @@ async def _oddiy_royxat(update: Update, uid: int, tur: str):
     royxat = await _qarzdorlar_yukla(update, uid, tur)
     if royxat is None:
         return
-    sarlavha = ("Balansi 0 bo'lganlar" if tur == "nol"
+    sarlavha = ("Balansi tugaganlar" if tur == "nol"
                 else "1 darsga puli qolganlar")
     h = QARZDOR_HOLAT[uid]
     h.update({"royxat": royxat, "sarlavha": sarlavha,
@@ -1171,14 +1171,13 @@ async def _bolish_saqla(update: Update, uid: int):
 
     await javob(update, "💾 Notion'ga yozilmoqda…")
 
-    # Barcha talabalar balansini yozishdan OLDIN o'qib qo'yamiz (Notion
-    # formulani darrov qayta hisoblamaydi). Bir talaba bir necha qismda
-    # bo'lsa ham to'g'ri chiqishi uchun lug'atda yuritamiz.
-    eski_balanslar = {}
+    # Har talabaning oldingi to'lovlarini YOZISHDAN OLDIN olamiz.
+    # DIQQAT: qismlarda talaba ID si q["id"] da saqlanadi.
+    oldingi_tolovlar = {}
     for q in qismlar:
-        tid = q.get("talaba_id")
-        if tid and tid not in eski_balanslar:
-            eski_balanslar[tid] = await N.talaba_balans(tid, q.get("ism"))
+        tid = q.get("id")
+        if tid and tid not in oldingi_tolovlar:
+            oldingi_tolovlar[tid] = await N.talaba_tolovlari(tid, limit=9)
 
     # Chekni bir marta yuklaymiz, hamma yozuvga o'sha faylni beramiz
     upload_id = None
@@ -1232,14 +1231,16 @@ async def _bolish_saqla(update: Update, uid: int):
                 "file_upload_id": upload_id,
                 "fayl_nomi": p.get("fayl_nomi"),
             })
-            tid = q.get("talaba_id")
-            eski = eski_balanslar.get(tid)
+            tid = q.get("id")
             qator = f"✅ {e(q['ism'])} — {pul(q['summa'])}"
-            if eski is not None:
-                yangi = eski + (q["summa"] or 0)
-                belgi = "🟢" if yangi > 0 else ("⚪" if yangi == 0 else "🔴")
-                qator += f"\n   💳 {pul(eski)} → <b>{pul(yangi)}</b> {belgi}"
-                eski_balanslar[tid] = yangi   # bir talaba 2 qismda bo'lsa
+            blok = _tolovlar_qatori(sana_iso, q["summa"],
+                                    oldingi_tolovlar.get(tid))
+            if blok:
+                qator += "\n" + blok.rstrip("\n")
+                # Bir talaba 2 qismda bo'lsa, keyingi qismda bu ham ko'rinsin
+                if oldingi_tolovlar.get(tid) is not None:
+                    oldingi_tolovlar[tid] = [{"sana": sana_iso, "summa": q["summa"]}] \
+                                            + oldingi_tolovlar[tid]
             natijalar.append(qator)
             sahifa_idlar.append(((sahifa.get("id") or "").replace("-", ""), q["ism"]))
         except Exception as ex:
@@ -1265,7 +1266,7 @@ async def _bolish_saqla(update: Update, uid: int):
     xabar += "\n\n🏷 Hammasi Shubhali deb belgilandi (tekshirib qo'ying)."
 
     # Har talabaning holat sanalarini tozalaymiz
-    for tid, ism_q in {q.get("talaba_id"): q.get("ism") for q in qismlar}.items():
+    for tid, ism_q in {q.get("id"): q.get("ism") for q in qismlar}.items():
         if tid:
             try:
                 await N.tolovdan_keyin_sanalar(tid, ism_q)
@@ -1452,15 +1453,29 @@ async def _sana_sorash(update: Update, uid: int, d, karta, karta_ism_bilan):
                 kb(qatorlar))
 
 
-def _balans_qatori(eski, summa):
-    """'💳 Balans: -40 000 → 20 000 so'm' qatorini yasaydi.
-    Balans o'qilmagan bo'lsa (None) — bo'sh qator qaytaradi, chunki
-    noto'g'ri raqam ko'rsatgandan ko'ra umuman ko'rsatmagan yaxshi."""
-    if eski is None:
+def _sana_qisqa(sana):
+    """'2026-09-07...' yoki '2026.09.07 ...' → '07.09.2026'."""
+    if not sana:
+        return "—"
+    s = str(sana)[:10].replace(".", "-")
+    try:
+        return date.fromisoformat(s).strftime("%d.%m.%Y")
+    except Exception:
+        return str(sana)[:10]
+
+
+def _tolovlar_qatori(yangi_sana, yangi_summa, oldingilar, limit=10):
+    """'💳 To'lovlari:' blokini yasaydi. Yangi to'lov birinchi turadi
+    (Notiondan qayta so'ramaymiz — yangi yozuv u yerda hali ko'rinmasligi
+    mumkin), keyin oldingilari. oldingilar=None → tarix olinmadi, blok
+    umuman ko'rsatilmaydi."""
+    if oldingilar is None:
         return ""
-    yangi = eski + (summa or 0)
-    belgi = "🟢" if yangi > 0 else ("⚪" if yangi == 0 else "🔴")
-    return f"💳 Balans: {pul(eski)} → <b>{pul(yangi)}</b> so'm {belgi}\n"
+    royxat = [(yangi_sana, yangi_summa)] + \
+             [(t["sana"], t["summa"]) for t in oldingilar]
+    royxat = royxat[:limit]
+    qatorlar = [f"{_sana_qisqa(s)} = {pul(sm)}" for s, sm in royxat]
+    return "💳 To'lovlari:\n" + "\n".join(qatorlar) + "\n"
 
 
 async def _saqla(update: Update, uid: int):
@@ -1473,9 +1488,8 @@ async def _saqla(update: Update, uid: int):
 
     await javob(update, "💾 Notion'ga yozilmoqda…")
 
-    # Balansni to'lovdan OLDIN o'qib qo'yamiz. Notion formulani darrov qayta
-    # hisoblamagani uchun, yangi balansni o'zimiz hisoblaymiz (eski + summa).
-    eski_balans = await N.talaba_balans(p["talaba_id"], p.get("talaba_nomi"))
+    # Oldingi to'lovlarni YOZISHDAN OLDIN olamiz (9 ta — yangisi bilan 10 ta).
+    oldingi_tolovlar = await N.talaba_tolovlari(p["talaba_id"], limit=9)
 
     # Telegram ID: agar talaba tanlanganda darrov yozilgan bo'lsa — o'shani olamiz.
     # Bo'lmasa (masalan forward+chek birga kelib darrov yozilmagan bo'lsa) — shu yerda.
@@ -1554,7 +1568,7 @@ async def _saqla(update: Update, uid: int):
     xabar = (f"✅ <b>To'lov qabul qilindi</b>\n\n"
              f"👤 {e(p['talaba_nomi'])}\n"
              f"💰 {pul(d.get('summa'))} so'm\n"
-             f"{_balans_qatori(eski_balans, d.get('summa'))}"
+             f"{_tolovlar_qatori(d.get('sana'), d.get('summa'), oldingi_tolovlar)}"
              f"{fayl_holati}\n")
     if yozilgan_id:
         xabar += f"📝 Telegram ID saqlandi: <code>{yozilgan_id}</code>\n"

@@ -688,6 +688,23 @@ async def balans_tekshir(talaba_id, ism):
     return natija
 
 
+async def talaba_tolovlari(talaba_id, limit=10):
+    """Talabaning oxirgi to'lovlari (eng yangisi birinchi).
+    Oddiy sana va raqam maydonlari — API ularni to'g'ri o'qiydi."""
+    try:
+        body = {
+            "filter": {"property": C.P_TALABA, "relation": {"contains": talaba_id}},
+            "sorts": [{"property": C.P_SANA, "direction": "descending"}],
+            "page_size": limit,
+        }
+        data = await _req("POST", f"/databases/{C.TOLOVLAR_DB}/query", body)
+        return [{"sana": _date(s, C.P_SANA), "summa": _number(s, C.P_SUMMA)}
+                for s in (data.get("results") or [])]
+    except Exception as ex:
+        log.warning("To'lovlar tarixi olinmadi (%s): %s", talaba_id, ex)
+        return None
+
+
 async def talaba_balans(talaba_id, ism=None):
     """Talabaning HAQIQIY balansi.
 
@@ -867,9 +884,10 @@ async def yozilishlar_hammasi():
 
 
 async def talabalar_nol_balans():
-    """Balansi AYNAN 0 bo'lgan talabalar."""
-    filter_ = {"property": C.P_TALABA_BALANS,
-               "formula": {"number": {"equals": 0}}}
+    """Balansi musbat (yoki 0), lekin BITTA DARSGA HAM yetmaydigan talabalar.
+    Notiondagi 'Balans tugadi' formulasi: 0 ≤ Balans < 1 aylanma."""
+    filter_ = {"property": C.P_TALABA_BALANS_TUGADI,
+               "formula": {"checkbox": {"equals": True}}}
     sahifalar = await _query_all(C.TALABALAR_DB, filter_)
     return [{
         "id": s["id"],
@@ -881,8 +899,9 @@ async def talabalar_nol_balans():
 
 
 async def talabalar_eslatma_toliq():
-    """'Eslatma kerak' ✓ bo'lgan talabalar (balansi musbat, 1 aylanmaga
-    yetadigan yoki kam). Qarzdorlar bilan bir xil ko'rinishda qaytadi."""
+    """'Eslatma kerak' ✓ — balansi AYNAN bitta darsga yetadigan talabalar
+    (1 aylanma ≤ Balans < 2 aylanma). Undan kamlari 'Balans tugadi' ga
+    tushadi, ko'plari hech qaysi ro'yxatga tushmaydi."""
     filter_ = {"property": C.P_TALABA_ESLATMA_KERAK,
                "formula": {"checkbox": {"equals": True}}}
     sahifalar = await _query_all(C.TALABALAR_DB, filter_)
