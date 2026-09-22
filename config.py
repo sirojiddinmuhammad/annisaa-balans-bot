@@ -73,7 +73,8 @@ DAVOMAT_DB = "e52488ca-0ae2-4b29-9132-039aefa80e4b"
 # Talabalar (formula/rollup, faqat o'qish uchun)
 P_TALABA_BALANS = "Balans"                    # formula (number)
 P_TALABA_BALANS_HOLATI = "Balans holati"      # formula (matn, masalan "🔴 Qarzdor")
-P_TALABA_ESLATMA_KERAK = "Eslatma kerak"      # formula (checkbox)
+P_TALABA_ESLATMA_KERAK = "Eslatma kerak"      # formula (checkbox) — 1 dars qoldi
+P_TALABA_BALANS_TUGADI = "Balans tugadi"      # formula (checkbox) — darsga yetmaydi
 P_TALABA_1AYLANMA = "1 aylanma"               # rollup (number)
 P_TALABA_QARZ_SANA = "Qarzga tushgan sana"    # date — bot yuritadi
 P_TALABA_ESLATMA_SANA = "Oxirgi eslatma sanasi"  # date — bot to'ldiradi

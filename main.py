@@ -82,6 +82,19 @@ TUGMA_QARZDOR = "📋 Qarzdorlar"
 TUGMA_BUGUN = "📊 Bugun"
 TUGMA_NOL = "⚪ Balansi tugagan"
 TUGMA_ESLATMA = "⏳ 1 dars qoldi"
+
+# Telefonda doimiy klaviatura keshlanib qoladi — tugma nomi o'zgarsa,
+# foydalanuvchi bir muddat ESKI tugmani bosib turadi. Shuning uchun eski
+# nomlarni ham tanib olamiz, aks holda bot ularni talaba ismi deb qidiradi.
+TUGMA_ALIAS = {
+    TUGMA_QARZDOR: "qarzdor",
+    TUGMA_BUGUN: "bugun",
+    TUGMA_NOL: "nol",
+    TUGMA_ESLATMA: "eslatma",
+    # eski nomlar
+    "⚪ Balansi 0": "nol",
+    "📊 Hisobot": "bugun",
+}
 ASOSIY_KB = ReplyKeyboardMarkup(
     [[KeyboardButton(TUGMA_QARZDOR), KeyboardButton(TUGMA_BUGUN)],
      [KeyboardButton(TUGMA_NOL), KeyboardButton(TUGMA_ESLATMA)]],
@@ -386,7 +399,8 @@ async def qarzdorlar_filtr_sorash(update: Update, uid: int):
 
 async def _qarzdorlar_yukla(update: Update, uid: int, tur="qarzdor"):
     """Ro'yxatni Notiondan oladi va keshlaydi."""
-    kutish = await update.effective_message.reply_text("\U0001f50d Izlanmoqda\u2026")
+    kutish = await update.effective_message.reply_text(
+        "\U0001f50d Izlanmoqda\u2026", reply_markup=ASOSIY_KB)
     try:
         royxat = await _qarzdorlar_yigish(tur)
     except Exception as ex:
@@ -660,7 +674,8 @@ async def hisobot_yubor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Tugma bosilganda — bugungi hisobot."""
     if not admin_mi(update):
         return
-    kutish = await update.effective_message.reply_text("\U0001f4ca Hisobot tayyorlanmoqda\u2026")
+    kutish = await update.effective_message.reply_text(
+        "\U0001f4ca Hisobot tayyorlanmoqda\u2026", reply_markup=ASOSIY_KB)
     try:
         matn = await _hisobot_yasash()
     except Exception as ex:
@@ -1722,18 +1737,17 @@ async def matn_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     p = holat_p(uid)
     stage = (p or {}).get("stage")
 
-    # Doimiy klaviaturadagi tugmalar (oddiy matn bo'lib keladi)
-    if matn == TUGMA_QARZDOR:
+    # Doimiy klaviaturadagi tugmalar (oddiy matn bo'lib keladi).
+    # Eski nomlar ham TUGMA_ALIAS orqali tanib olinadi.
+    amal = TUGMA_ALIAS.get(matn)
+    if amal == "qarzdor":
         await qarzdorlar_filtr_sorash(update, uid)
         return
-    if matn == TUGMA_BUGUN:
+    if amal == "bugun":
         await hisobot_yubor(update, ctx)
         return
-    if matn == TUGMA_NOL:
-        await _oddiy_royxat(update, uid, "nol")
-        return
-    if matn == TUGMA_ESLATMA:
-        await _oddiy_royxat(update, uid, "eslatma")
+    if amal in ("nol", "eslatma"):
+        await _oddiy_royxat(update, uid, amal)
         return
 
     # Summani tuzatish — yangi summa kutilmoqda
