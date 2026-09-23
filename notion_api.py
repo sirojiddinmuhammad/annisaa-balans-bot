@@ -292,6 +292,26 @@ async def karta_top(l4):
     return None
 
 
+async def kartani_tugrila(d):
+    """Model ba'zan qabul qiluvchi va yuboruvchi kartani ALMASHTIRIB yuboradi
+    (ba'zi cheklarda qabul qiluvchi tepada turadi). Bizda markazning o'z
+    kartalari ro'yxati bor — shuning uchun rolni tartibga emas, RO'YXATGA
+    qarab aniqlaymiz: qaysi karta bizniki bo'lsa, o'sha qabul qiluvchi.
+    Qaytadi: True — almashtirildi."""
+    qabul, yubor = d.get("qabul_karta"), d.get("yuboruvchi_karta")
+    if not yubor:
+        return False
+    if await karta_top(qabul):
+        return False                    # qabul karta allaqachon bizniki
+    if await karta_top(yubor):
+        d["qabul_karta"], d["yuboruvchi_karta"] = yubor, qabul
+        d["qabul_fio"], d["tolovchi_fio"] = d.get("tolovchi_fio"), d.get("qabul_fio")
+        d["izoh"] = ((d.get("izoh") or "") + " | kartalar almashtirildi").strip(" |")
+        log.info("Karta roli tuzatildi: qabul %s → %s", qabul, yubor)
+        return True
+    return False
+
+
 def _karta_ism_balli(qidiruv, karta_nomi):
     """Kartani ism bo'yicha solishtirish (bosh harf ham hisobga olinadi)."""
     from eslatma_parser import _normalize

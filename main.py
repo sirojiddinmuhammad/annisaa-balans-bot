@@ -976,6 +976,12 @@ async def chek_qabul(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML)
         return
 
+    # Karta roli to'g'rimi — bizning kartalar ro'yxati bo'yicha tekshiramiz
+    try:
+        await N.kartani_tugrila(d)
+    except Exception:
+        log.exception("Karta roli tekshirilmadi")
+
     holat_saqla(uid, chek=d, chek_url=chek_url, hash=hash_,
                 fayl_unique=fayl_unique, fayl_nomi=nomi, mime=mime, baytlar=baytlar)
     await kutish.delete()

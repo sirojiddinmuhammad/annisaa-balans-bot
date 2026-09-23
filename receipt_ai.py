@@ -15,13 +15,16 @@ log = logging.getLogger(__name__)
 API_URL = "https://api.anthropic.com/v1/messages"
 
 PROMPT = """Sen to'lov cheklarini o'qiydigan yordamchisan. Rasmda yoki PDFda \
-O'zbekistondagi to'lov cheki (Payme, Click, Uzum, Paynet, bank ilovasi va h.k.) berilgan.
+O'zbekistondagi to'lov cheki (Payme, Click, Uzum, Paynet, Beepul, bank ilovasi \
+va h.k.) berilgan.
 
-Faqat JSON qaytar. Hech qanday izoh, matn yoki markdown belgisi qo'shma.
+Avval chekni diqqat bilan, erkin o'qi — qaysi yozuv nimani bildirishini \
+YONIDAGI YORLIQQA qarab tushun. Keyin faqat JSON qaytar. Hech qanday izoh, \
+matn yoki markdown belgisi qo'shma.
 
 JSON tuzilishi:
 {
-  "tolov_tizimi": "Payme|Click|Uzum|Paynet|Bank ilovasi|Boshqa",
+  "tolov_tizimi": "Payme|Click|Uzum|Paynet|Beepul|Bank ilovasi|Boshqa",
   "tranzaksiya_id": "chek/tranzaksiya raqami yoki null",
   "sana": "YYYY-MM-DD yoki null",
   "vaqt": "HH:MM yoki null",
@@ -38,24 +41,37 @@ JSON tuzilishi:
   "izoh": "chekda o'qilmagan yoki chalkash narsa bo'lsa qisqa izoh, aks holda null"
 }
 
-QAT'IY QOIDALAR:
-1. "summa" — QABUL QILUVCHIGA O'TGAN summa. Agar chekda "Qabul qiluvchiga \
-o'tkaziladigan summa" yoki shunga o'xshash maydon bo'lsa, AYNAN shuni ol. \
-Sarlavhadagi eng katta raqamni olma — u komissiya bilan birga bo'lishi mumkin. \
-Agar faqat bitta summa bo'lsa, "summa" va "yuborilgan_summa" teng bo'ladi.
-2. "qabul_karta" va "yuboruvchi_karta" — DOIM 4 xonali matn, boshidagi nol \
-saqlanadi (masalan "0419"). Yulduzchalarni ("**** **** **** 4690") olib tashla, \
-faqat oxirgi 4 raqamni qoldir.
-3. "muvaffaqiyatli" — chekda "Operatsiya bajarildi", "Muvaffaqiyatli", "Готово", \
-"Успешно", "To'landi" kabi tasdiq bo'lsa true. "Kutilmoqda", "Rad etildi", \
-"В обработке", "Отклонено" bo'lsa false.
-4. Ekranning yuqorisidagi telefon soati (masalan status paneldagi "14:40") \
-to'lov vaqti EMAS. Faqat chekning o'zida ko'rsatilgan sana/vaqtni ol. \
-Agar chekda sana yo'q bo'lsa — null qaytar.
-5. Biror maydon topilmasa — null. HECH QACHON taxmin qilma, o'ylab topma.
-6. Rasm noaniq, kesilgan yoki qisman ko'rinmasa — "ishonch": "past".
-7. Sana faqat kun/oy bo'lsa (yil ko'rsatilmagan) — joriy yilni qo'y.
-8. Summani so'm birligida butun son qilib ber, tiyinlarni tashla."""
+SUMMALAR:
+Chekda bir nechta summa bo'lishi mumkin. Ularni YORLIG'IGA qarab ajrat:
+- Qabul qiluvchiga o'tgan summa → "summa".
+  Yorliqlari: "Summa", "Asosiy summa", "Qabul qiluvchiga o'tkaziladigan summa",
+  "Сумма", "Сумма перевода".
+- Yuboruvchi to'lagan umumiy summa → "yuborilgan_summa".
+  Yorliqlari: "Umumiy miqdor", "Jami", "Komissiya bilan summa", "Итого",
+  "Общая сумма", "К оплате".
+Agar ikkita HAR XIL summa bo'lsa: kichigi "summa", kattasi "yuborilgan_summa",
+farqi "komissiya". Sarlavhadagi eng yirik raqam odatda komissiya bilan birga —
+uni "summa" deb olma. Agar chekda faqat bitta summa bo'lsa, ikkalasi teng bo'ladi.
+
+KARTALAR:
+Kartaning roli chekdagi TARTIBIGA bog'liq emas — ba'zi cheklarda qabul qiluvchi
+yuqorida turadi. Faqat yonidagi yorliqqa qara:
+- "Qabul qiluvchining kartasi", "Qabul qiluvchi", "Karta raqami" (qabul FISH
+  yonida), "Получатель" → "qabul_karta"
+- "Yuboruvchi kartasi", "Yuboruvchining kartasi", "Отправитель" → "yuboruvchi_karta"
+Ikkalasi ham DOIM 4 xonali matn, boshidagi nol saqlanadi ("0419").
+Yulduzchalarni olib tashla ("561468*****1881" → "1881").
+
+QOLGAN QOIDALAR:
+1. "muvaffaqiyatli" — "Operatsiya bajarildi", "Muvaffaqiyatli", "Готово",
+   "Успешно", "To'landi" bo'lsa true. "Kutilmoqda", "Rad etildi", "В обработке",
+   "Отклонено" bo'lsa false.
+2. Ekran tepasidagi telefon soati (status paneldagi "14:40") to'lov vaqti EMAS.
+   Faqat chekning o'zidagi sana/vaqtni ol. Chekda sana bo'lmasa — null.
+3. Biror maydon topilmasa — null. HECH QACHON taxmin qilma, o'ylab topma.
+4. Rasm noaniq, kesilgan yoki qisman ko'rinmasa — "ishonch": "past".
+5. Sana faqat kun/oy bo'lsa (yil ko'rsatilmagan) — joriy yilni qo'y.
+6. Summani so'm birligida butun son qilib ber, tiyinlarni tashla."""
 
 
 def rasm_hash(baytlar: bytes, mime: str) -> str:
@@ -161,14 +177,27 @@ async def chekni_oqi(baytlar: bytes, mime: str) -> dict:
 
     # Tizim nomini ruxsat etilgan ro'yxatga keltirish
     ruxsat = {"payme": "Payme", "click": "Click", "uzum": "Uzum",
-              "paynet": "Paynet", "bank ilovasi": "Bank ilovasi"}
+              "paynet": "Paynet", "beepul": "Beepul", "bank ilovasi": "Bank ilovasi"}
     d["tolov_tizimi"] = ruxsat.get(d["tolov_tizimi"].lower(), "Boshqa")
 
-    # Agar summa sarlavhadan olinib, komissiya ham bor bo'lsa — tuzatish
-    if (d["summa"] and d["komissiya"] and d["yuborilgan_summa"]
-            and d["summa"] == d["yuborilgan_summa"]
-            and d["yuborilgan_summa"] > d["komissiya"]):
-        d["summa"] = d["yuborilgan_summa"] - d["komissiya"]
-        d["izoh"] = ((d["izoh"] or "") + " | summa komissiya ayirib tuzatildi").strip(" |")
+    # ---- Summalarni o'z-o'zini tuzatish ----
+    # Model ba'zan sarlavhadagi (komissiya bilan) summani "summa" deb oladi.
+    # Qoida sodda: qabul qiluvchiga o'tgan summa HECH QACHON yuborilganidan
+    # katta bo'lmaydi.
+    s, ys, k = d["summa"], d["yuborilgan_summa"], d["komissiya"]
+
+    if s and ys and s > ys:
+        d["summa"], d["yuborilgan_summa"] = ys, s
+        d["izoh"] = ((d["izoh"] or "") + " | summa/yuborilgan almashtirildi").strip(" |")
+        s, ys = ys, s
+
+    # Ikkalasi teng, lekin komissiya bor → sarlavhadagi raqam olingan
+    if s and ys and s == ys and k and ys > k:
+        d["summa"] = ys - k
+        d["izoh"] = ((d["izoh"] or "") + " | komissiya ayirildi").strip(" |")
+
+    # Komissiya ko'rsatilmagan, lekin ikki summa farq qiladi → o'zimiz hisoblaymiz
+    if s and ys and ys > s and not k:
+        d["komissiya"] = ys - s
 
     return d
