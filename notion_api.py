@@ -790,6 +790,54 @@ async def qarzdormi(talaba_id, ism):
         return None
 
 
+async def _filtrda_bormi(talaba_id, ism, shart):
+    """Talaba berilgan shartga mos keladimi? Balans QIYMATINI o'qimaymiz —
+    Notiondan filtr bilan so'raymiz, chunki filtrni Notion o'z ichida
+    hisoblaydi va javob to'g'ri bo'ladi."""
+    f = {"and": [{"property": C.P_TALABA_ISM, "title": {"equals": ism}}, shart]}
+    sahifalar = await _query_all(C.TALABALAR_DB, f, page_size=20)
+    kerakli = (talaba_id or "").replace("-", "")
+    return any(s["id"].replace("-", "") == kerakli for s in sahifalar)
+
+
+async def balans_holati(talaba_id, ism):
+    """Balansning HOLATINI aniqlaydi (aniq summani emas — uni API bermaydi).
+    Qaytadi: (belgi, matn) yoki (None, None) — aniqlab bo'lmasa."""
+    if not ism:
+        return None, None
+    try:
+        if await _filtrda_bormi(talaba_id, ism,
+                {"property": C.P_TALABA_BALANS,
+                 "formula": {"number": {"less_than": 0}}}):
+            return "🔴", "Qarzdor"
+        if await _filtrda_bormi(talaba_id, ism,
+                {"property": C.P_TALABA_BALANS_TUGADI,
+                 "formula": {"checkbox": {"equals": True}}}):
+            return "⚪", "To'lovi tugagan"
+        if await _filtrda_bormi(talaba_id, ism,
+                {"property": C.P_TALABA_ESLATMA_KERAK,
+                 "formula": {"checkbox": {"equals": True}}}):
+            return "⏳", "1 dars qoldi"
+        return "🟢", "Musbat"
+    except Exception as ex:
+        log.warning("Balans holati aniqlanmadi (%s): %s", ism, ex)
+        return None, None
+
+
+async def balans_holati_kutib(talaba_id, ism, oldingi=None, urinish=2):
+    """To'lovdan KEYINGI holat. Notion balansni qayta hisoblashga bir necha
+    soniya oladi — shuning uchun holat o'zgarmagan bo'lsa bir marta kutib
+    qayta so'raymiz, aks holda to'lovdan OLDINGI holat chiqib qolardi."""
+    import asyncio
+    for n in range(urinish):
+        belgi, matn = await balans_holati(talaba_id, ism)
+        if belgi is None or oldingi is None or matn != oldingi:
+            return belgi, matn
+        if n < urinish - 1:
+            await asyncio.sleep(2)
+    return belgi, matn
+
+
 async def tolovdan_keyin_sanalar(talaba_id, ism):
     """Chek qabul qilingach sanalarni tozalaydi.
     - Balansi tugagan sana / 1 dars qolgan sana → shartsiz o'chadi

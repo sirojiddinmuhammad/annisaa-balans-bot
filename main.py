@@ -1194,11 +1194,12 @@ async def _bolish_saqla(update: Update, uid: int):
 
     # Har talabaning oldingi to'lovlarini YOZISHDAN OLDIN olamiz.
     # DIQQAT: qismlarda talaba ID si q["id"] da saqlanadi.
-    oldingi_tolovlar = {}
+    oldingi_tolovlar, holatlar_oldin = {}, {}
     for q in qismlar:
         tid = q.get("id")
         if tid and tid not in oldingi_tolovlar:
             oldingi_tolovlar[tid] = await N.talaba_tolovlari(tid, limit=9)
+            _, holatlar_oldin[tid] = await N.balans_holati(tid, q.get("ism"))
 
     # Chekni bir marta yuklaymiz, hamma yozuvga o'sha faylni beramiz
     upload_id = None
@@ -1254,6 +1255,10 @@ async def _bolish_saqla(update: Update, uid: int):
             })
             tid = q.get("id")
             qator = f"✅ {e(q['ism'])} — {pul(q['summa'])}"
+            belgi, holat = await N.balans_holati_kutib(
+                tid, q.get("ism"), oldingi=holatlar_oldin.get(tid))
+            if belgi:
+                qator += f"\n   💳 {belgi} {holat}"
             blok = _tolovlar_qatori(sana_iso, q["summa"],
                                     oldingi_tolovlar.get(tid))
             if blok:
@@ -1512,6 +1517,10 @@ async def _saqla(update: Update, uid: int):
     # Oldingi to'lovlarni YOZISHDAN OLDIN olamiz (9 ta — yangisi bilan 10 ta).
     oldingi_tolovlar = await N.talaba_tolovlari(p["talaba_id"], limit=9)
 
+    # To'lovdan OLDINGI balans holati — keyingisi bilan solishtirish uchun
+    # (Notion qayta hisoblashga ulgurganini shundan bilamiz)
+    _, holat_oldin = await N.balans_holati(p["talaba_id"], p.get("talaba_nomi"))
+
     # Telegram ID: agar talaba tanlanganda darrov yozilgan bo'lsa — o'shani olamiz.
     # Bo'lmasa (masalan forward+chek birga kelib darrov yozilmagan bo'lsa) — shu yerda.
     yozilgan_id = p.get("tgid_natija")
@@ -1586,9 +1595,15 @@ async def _saqla(update: Update, uid: int):
     fayl_holati = ("📎 Chek Notion'ga yuklandi" if upload_id else
                    ("🔗 Chek arxiv kanalda" if p.get("chek_url") else
                     "⚠️ Chek saqlanmadi"))
+    # To'lovdan keyingi balans holati (aniq summani API bermaydi — faqat holat)
+    belgi, holat = await N.balans_holati_kutib(
+        p["talaba_id"], p.get("talaba_nomi"), oldingi=holat_oldin)
+    holat_qatori = f"💳 Balans holati: {belgi} {holat}\n" if belgi else ""
+
     xabar = (f"✅ <b>To'lov qabul qilindi</b>\n\n"
              f"👤 {e(p['talaba_nomi'])}\n"
              f"💰 {pul(d.get('summa'))} so'm\n"
+             f"{holat_qatori}"
              f"{_tolovlar_qatori(d.get('sana'), d.get('summa'), oldingi_tolovlar)}"
              f"{fayl_holati}\n")
     if yozilgan_id:
