@@ -98,9 +98,17 @@ _KARTA_OGOHLANTIRISH = (
 
 def eslatma_matn_darsbay(talaba_ism, guruh_nomi, tolov, darslar, kod) -> str:
     """1 darsga puli qolgan, darsbay (chastotali) guruh uchun to'liq matn."""
-    belgi = {"keldi": "✅", "kelmadi": "❌", "bolajak": "⏳"}
-    satrlar = [f"{i}. {_sana_fmt(d['sana'])} {belgi.get(d['holat'], '✅')}"
-               for i, d in enumerate(darslar, 1)]
+    # Ta'til kunlari raqamlanmaydi — ular dars emas, shuning uchun
+    # tartib raqami faqat haqiqiy darslarga beriladi.
+    belgi = {"keldi": "✅", "kelmadi": "❌", "bolajak": "⏳", "nomalum": "⏳"}
+    satrlar, n = [], 0
+    for d in darslar:
+        sana = _sana_fmt(d["sana"])
+        if d["holat"] == "tatil":
+            satrlar.append(f"   {sana} (Ta'til) 🏖")
+            continue
+        n += 1
+        satrlar.append(f"{n}. {sana} {belgi.get(d['holat'], '✅')}")
     darslar_matn = "\n".join(satrlar) if satrlar else "—"
     return (
         f"📨 Assalomu alaykum. <code>{_e(talaba_ism)}</code>\n\n"

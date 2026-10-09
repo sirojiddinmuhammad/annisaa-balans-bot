@@ -981,29 +981,55 @@ async def talaba_faol_yozilishlar_toliq(talaba_id, darslar_kerak=False):
     return out
 
 
+def _davomat_holati(holat_raw):
+    """Notiondagi Holat → ichki belgiga aylantiradi.
+    Variantlar: Darsda qatnashdi / Darsga kelmadi / Ta'til / Oylik hisob / bo'sh"""
+    h = (holat_raw or "").lower().replace("’", "'")
+    if not h:
+        return "nomalum"            # hali belgilanmagan
+    if "kelmadi" in h:
+        return "kelmadi"
+    if "ta'til" in h or "tatil" in h:
+        return "tatil"
+    if "oylik" in h:
+        return "oylik"              # oylik guruh hisobi — darsbay ro'yxatga kirmaydi
+    return "keldi"
+
+
 async def yozilish_darslari(yozilish_id, chastota, dars_kunlari):
-    """Yozilish uchun oxirgi (chastota-1) ta dars (sana+holat) va navbatdagi
-    bo'lajak darsni qaytaradi: [{"sana": "YYYY-MM-DD", "holat": "keldi"/"kelmadi"/"bolajak"}]"""
+    """Yozilish uchun oxirgi darslar ro'yxati va navbatdagi bo'lajak dars.
+
+    DIQQAT: ta'til kunlari ham Davomatda yozuv bo'lib turadi, lekin ular
+    HAQIQIY DARS emas. Shuning uchun (chastota-1) ta haqiqiy darsni sanaymiz,
+    orasiga tushgan ta'til kunlarini esa qo'shimcha qator qilib ko'rsatamiz.
+    Qaytadi: [{"sana", "holat"}] — holat: keldi/kelmadi/tatil/nomalum/bolajak"""
     chastota = int(chastota) if chastota else 8
     kerak = max(chastota - 1, 1)
+
+    # Ta'til yozuvlari ham oraga tushgani uchun kengroq olamiz
     filter_ = {"property": "Yozilish", "relation": {"contains": yozilish_id}}
     body = {"filter": filter_,
             "sorts": [{"property": C.P_DAVOMAT_SANA, "direction": "descending"}],
-            "page_size": kerak}
+            "page_size": min(kerak * 3, 100)}
     data = await _req("POST", f"/databases/{C.DAVOMAT_DB}/query", body)
-    yozuvlar = list(reversed(data.get("results") or []))
+    yozuvlar = data.get("results") or []          # eng yangisi birinchi
 
-    darslar = []
+    # Oxirgidan boshlab orqaga yurib, (chastota-1) ta HAQIQIY dars yig'amiz
+    tanlangan, haqiqiy = [], 0
     for y in yozuvlar:
         sana = _date(y, C.P_DAVOMAT_SANA)
         if not sana:
             continue
-        holat_raw = (_select(y, C.P_DAVOMAT_HOLAT) or "").lower()
-        if "kelmadi" in holat_raw:
-            holat = "kelmadi"
-        else:
-            holat = "keldi"
-        darslar.append({"sana": sana, "holat": holat})
+        holat = _davomat_holati(_select(y, C.P_DAVOMAT_HOLAT))
+        if holat == "oylik":
+            continue                               # darsbay ro'yxatga kirmaydi
+        if holat in ("keldi", "kelmadi", "nomalum"):
+            if haqiqiy >= kerak:
+                break                              # yetarli dars yig'ildi
+            haqiqiy += 1
+        tanlangan.append({"sana": sana, "holat": holat})
+
+    darslar = list(reversed(tanlangan))            # eskisidan yangisiga
 
     oxirgi_sana = darslar[-1]["sana"] if darslar else None
     keyingi = _keyingi_dars_sanasi(oxirgi_sana, dars_kunlari)
