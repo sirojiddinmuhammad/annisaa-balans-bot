@@ -17,6 +17,16 @@ HEADERS = {
 
 _kesh: dict = {}
 
+# Balans formulasi ichida rollup-ustidan-rollup zanjiri bor. Eski API
+# versiyasi (2022-06-28) bunday zanjirni hisoblamaydi va 0 deb oladi —
+# shuning uchun Balans = Jami to'langan bo'lib chiqardi. Yangi versiya
+# (2025-09-03) to'g'ri hisoblaydi (admin botda shu ishlaydi).
+# LEKIN: yangi versiyada /databases/{id}/query ishlamaydi, u yerda
+# /data_sources/{id}/query kerak. Shuning uchun yangi versiyani FAQAT
+# sahifa o'qishda (GET /pages/{id}) ishlatamiz, qolgan hamma joyda eski
+# versiya qoladi — hech narsa buzilmaydi.
+HEADERS_YANGI = dict(HEADERS, **{"Notion-Version": "2025-09-03"})
+
 
 # ---------------------------------------------------------------- yordamchi
 async def _req(method: str, path: str, json=None, timeout=30):
@@ -24,6 +34,18 @@ async def _req(method: str, path: str, json=None, timeout=30):
         r = await cli.request(method, f"{BASE}{path}", headers=HEADERS, json=json)
     if r.status_code >= 400:
         log.error("Notion %s %s → %s %s", method, path, r.status_code, r.text[:500])
+        r.raise_for_status()
+    return r.json()
+
+
+async def _req_yangi(method: str, path: str, json=None, timeout=30):
+    """Yangi API versiyasi bilan so'rov (faqat GET /pages/{id} uchun)."""
+    async with httpx.AsyncClient(timeout=timeout) as cli:
+        r = await cli.request(method, f"{BASE}{path}", headers=HEADERS_YANGI,
+                              json=json)
+    if r.status_code >= 400:
+        log.error("Notion(yangi) %s %s → %s %s",
+                  method, path, r.status_code, r.text[:300])
         r.raise_for_status()
     return r.json()
 
@@ -836,6 +858,55 @@ async def balans_holati_kutib(talaba_id, ism, oldingi=None, urinish=2):
         if n < urinish - 1:
             await asyncio.sleep(2)
     return belgi, matn
+
+
+# ---------------------------------------------------------------- aniq balans
+def _formula_qiymat(sahifa, prop):
+    """Formula qiymatini TURIGA QARAMAY o'qiydi.
+    Balans → number, Balans holati → string. Turni qattiq yozmaymiz,
+    chunki har formulada boshqacha (admin botdagi usul)."""
+    f = (sahifa.get("properties", {}).get(prop) or {}).get("formula") or {}
+    q = f.get(f.get("type"))
+    if isinstance(q, dict):           # date formulasi
+        return q.get("start")
+    return q
+
+
+async def talaba_balans_aniq(talaba_id):
+    """Balansning ANIQ summasi va holati.
+
+    GET /pages/{id} + Notion-Version 2025-09-03 — admin botda ishlaydigan
+    usul. Eski versiya rollup zanjirini 0 deb olardi, yangisi to'g'ri
+    hisoblaydi.
+    Xato bo'lsa {"balans": None, "holati": None} qaytadi — hisobot
+    buzilmaydi, shunchaki o'sha qator ko'rsatilmaydi."""
+    try:
+        s = await _req_yangi("GET", f"/pages/{talaba_id}")
+        return {
+            "balans": _formula_qiymat(s, C.P_TALABA_BALANS),
+            "holati": _formula_qiymat(
+                s, getattr(C, "P_TALABA_BALANS_HOLATI", "Balans holati")),
+        }
+    except Exception as ex:
+        log.warning("Aniq balans o'qilmadi (%s): %s", talaba_id, ex)
+        return {"balans": None, "holati": None}
+
+
+async def balans_kutib(talaba_id, oldingi=None, urinish=3):
+    """To'lovdan KEYINGI balans. Notion rollupni qayta hisoblashga bir necha
+    soniya oladi — qiymat o'zgarmagan bo'lsa kutib qayta so'raymiz, aks
+    holda to'lovdan OLDINGI summa chiqib qolardi."""
+    import asyncio
+    natija = {"balans": None, "holati": None}
+    for n in range(urinish):
+        natija = await talaba_balans_aniq(talaba_id)
+        if natija.get("balans") is None:
+            return natija                  # o'qib bo'lmadi — kutishdan foyda yo'q
+        if oldingi is None or natija["balans"] != oldingi:
+            return natija                  # yangilandi
+        if n < urinish - 1:
+            await asyncio.sleep(2)
+    return natija
 
 
 async def tolovdan_keyin_sanalar(talaba_id, ism):
