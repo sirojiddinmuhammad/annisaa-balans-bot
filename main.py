@@ -103,13 +103,18 @@ ASOSIY_KB = ReplyKeyboardMarkup(
 
 
 async def javob(update: Update, matn, keyboard=None):
+    """Javob yuboradi. Inline tugma bo'lmasa — pastki menyuni ham qayta
+    biriktiradi, shunda u yo'qolib qolmaydi (Telegramda klaviatura o'zi
+    biriktirilgan xabar o'chirilsa yo'qoladi, shuning uchun uni o'chmaydigan
+    xabarlarga muntazam qayta biriktirib turamiz)."""
     if update.callback_query:
         await update.callback_query.edit_message_text(
             matn, parse_mode=ParseMode.HTML, reply_markup=keyboard,
             disable_web_page_preview=True)
     else:
         await update.effective_message.reply_text(
-            matn, parse_mode=ParseMode.HTML, reply_markup=keyboard,
+            matn, parse_mode=ParseMode.HTML,
+            reply_markup=keyboard if keyboard is not None else ASOSIY_KB,
             disable_web_page_preview=True)
 
 
@@ -117,7 +122,8 @@ async def javob_yangi(update: Update, matn, keyboard=None):
     """Har doim YANGI xabar yuboradi (mavjudini tahrirlamaydi).
     Ro'yxat ochiq turishi kerak bo'lgan joylarda ishlatiladi."""
     await update.effective_message.reply_text(
-        matn, parse_mode=ParseMode.HTML, reply_markup=keyboard,
+        matn, parse_mode=ParseMode.HTML,
+        reply_markup=keyboard if keyboard is not None else ASOSIY_KB,
         disable_web_page_preview=True)
 
 
@@ -180,10 +186,19 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "ro'yxatlar, raqamni bosib eslatma matnini olasiz.\n"
         "📊 <b>Bugun</b> — kunlik hisobot.\n\n"
         "<code>/bekor</code> — bekor qilish\n"
-        "<code>/kesh</code> — ro'yxatlarni yangilash\n\n"
+        "<code>/kesh</code> — ro'yxatlarni yangilash\n"
+        "<code>/menyu</code> — pastki menyuni tiklash\n\n"
         f"🔔 Har kuni {C.HISOBOT_SOATI:02d}:00 da kunlik hisobot keladi.\n\n"
         f"Sizning ID: <code>{uid}</code>",
         parse_mode=ParseMode.HTML, reply_markup=ASOSIY_KB)
+
+
+async def menyu_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Pastki menyuni qayta chiqaradi (/start ning qisqa varianti)."""
+    if not admin_mi(update):
+        return
+    await update.effective_message.reply_text(
+        "⌨️ Menyu tiklandi.", reply_markup=ASOSIY_KB)
 
 
 async def bekor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -399,8 +414,11 @@ async def qarzdorlar_filtr_sorash(update: Update, uid: int):
 
 async def _qarzdorlar_yukla(update: Update, uid: int, tur="qarzdor"):
     """Ro'yxatni Notiondan oladi va keshlaydi."""
+    # DIQQAT: bu xabar keyin o'chiriladi. Telegramda klaviatura biriktirilgan
+    # xabar o'chirilsa, KLAVIATURA HAM YO'QOLADI \u2014 shuning uchun bu yerga
+    # ASOSIY_KB biriktirilmaydi (u /start xabarida biriktirilgan va turadi).
     kutish = await update.effective_message.reply_text(
-        "\U0001f50d Izlanmoqda\u2026", reply_markup=ASOSIY_KB)
+        "\U0001f50d Izlanmoqda\u2026")
     try:
         royxat = await _qarzdorlar_yigish(tur)
     except Exception as ex:
@@ -529,12 +547,16 @@ async def _qarzdor_tanlandi(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     item = royxat[idx]
     yozilishlar = item.get("mos_yozilishlar") or item["yozilishlar"]
 
-    for y in yozilishlar:
+    # Oxirgi xabarga pastki menyuni biriktiramiz — bu xabarlar o'chmaydi,
+    # shuning uchun menyu shu yerda qayta tiklanadi.
+    oxirgisi = len(yozilishlar) - 1
+    for i, y in enumerate(yozilishlar):
         kod = ES.kod_yasash(y["yozilish_id"], item["talaba_id"],
                             item["talaba_ism"], y["guruh_nomi"])
         matn = await _royxat_matni(tur, item, y, kod)
-        await ctx.bot.send_message(update.effective_chat.id, matn,
-                                   parse_mode=ParseMode.HTML)
+        await ctx.bot.send_message(
+            update.effective_chat.id, matn, parse_mode=ParseMode.HTML,
+            reply_markup=ASOSIY_KB if i == oxirgisi else None)
 
     # Oxirgi eslatma sanasini yozamiz
     await N.eslatma_sana_yoz(item["talaba_id"])
@@ -674,8 +696,9 @@ async def hisobot_yubor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Tugma bosilganda — bugungi hisobot."""
     if not admin_mi(update):
         return
+    # Bu xabar ham o'chiriladi \u2014 klaviatura biriktirilmaydi (yuqoridagi izohga qarang)
     kutish = await update.effective_message.reply_text(
-        "\U0001f4ca Hisobot tayyorlanmoqda\u2026", reply_markup=ASOSIY_KB)
+        "\U0001f4ca Hisobot tayyorlanmoqda\u2026")
     try:
         matn = await _hisobot_yasash()
     except Exception as ex:
@@ -2039,6 +2062,7 @@ def main():
     app = Application.builder().token(C.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("bekor", bekor))
+    app.add_handler(CommandHandler("menyu", menyu_cmd))
     app.add_handler(CommandHandler("kesh", kesh_yangila))
     app.add_handler(CommandHandler("balans", balans_cmd))
     app.add_handler(CommandHandler("qarzdorlar", qarzdorlar_cmd))
